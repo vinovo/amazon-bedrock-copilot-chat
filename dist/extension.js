@@ -56106,16 +56106,27 @@ class BedrockChatModelProvider {
         return Math.ceil(input.length / 4);
       }
       let totalTokens = 0;
-      for (const part of input.content) {
-        if (part instanceof vscode6.LanguageModelTextPart) {
-          totalTokens += Math.ceil(part.value.length / 4);
-        } else if (part instanceof vscode6.LanguageModelToolCallPart) {
-          const inputStr = JSON.stringify(part.input) ?? "";
-          totalTokens += Math.ceil((part.name.length + inputStr.length) / 4);
-        } else if (part instanceof vscode6.LanguageModelToolResultPart) {
-          for (const item of part.content) {
-            if (item instanceof vscode6.LanguageModelTextPart) {
-              totalTokens += Math.ceil(item.value.length / 4);
+      const content = Array.isArray(input?.content) ? input.content : [];
+      for (const rawPart of content) {
+        const part = rawPart;
+        if (part instanceof vscode6.LanguageModelTextPart || typeof part?.value === "string" && !("name" in part) && !("callId" in part)) {
+          const value = part.value ?? "";
+          totalTokens += Math.ceil(value.length / 4);
+          continue;
+        }
+        if (part instanceof vscode6.LanguageModelToolCallPart || typeof part?.name === "string" && "input" in part) {
+          const p = part;
+          const inputStr = p.input === undefined ? "" : JSON.stringify(p.input) ?? "";
+          totalTokens += Math.ceil(((p.name?.length ?? 0) + inputStr.length) / 4);
+          continue;
+        }
+        if (part instanceof vscode6.LanguageModelToolResultPart || typeof part?.callId === "string" && Array.isArray(part?.content)) {
+          const items = part.content ?? [];
+          for (const rawItem of items) {
+            const item = rawItem;
+            if (item instanceof vscode6.LanguageModelTextPart || typeof item?.value === "string") {
+              const value = item.value ?? "";
+              totalTokens += Math.ceil(value.length / 4);
             } else {
               try {
                 totalTokens += Math.ceil(JSON.stringify(item).length / 4);
@@ -56124,13 +56135,22 @@ class BedrockChatModelProvider {
               }
             }
           }
-        } else if (typeof part === "object" && part !== null && "data" in part && "mimeType" in part) {
+          continue;
+        }
+        if (typeof part === "object" && part !== null && "data" in part && "mimeType" in part) {
           const dataPart = part;
-          if (dataPart.mimeType.startsWith("image/")) {
-            totalTokens += Math.min(Math.ceil(dataPart.data.length / 50), 1600);
+          const byteLength = dataPart.data?.length ?? 0;
+          if (typeof dataPart.mimeType === "string" && dataPart.mimeType.startsWith("image/")) {
+            totalTokens += Math.min(Math.ceil(byteLength / 50), 1600);
           } else {
-            totalTokens += Math.ceil(dataPart.data.length / 4);
+            totalTokens += Math.ceil(byteLength / 4);
           }
+          continue;
+        }
+        try {
+          totalTokens += Math.ceil(JSON.stringify(part).length / 4);
+        } catch {
+          totalTokens += 50;
         }
       }
       return totalTokens;
@@ -56174,8 +56194,9 @@ class BedrockChatModelProvider {
           logger.debug(`[Bedrock Model Provider] Token count from API: ${tokenCount}`);
           return tokenCount;
         }
-        logger.debug("[Bedrock Model Provider] CountTokens not available, using estimation");
-        return estimateTokens(text);
+        const estimate = estimateTokens(text);
+        logger.debug(`[Bedrock Model Provider] CountTokens not available, using estimation: ${estimate}`);
+        return estimate;
       } finally {
         cancellationListener.dispose();
       }
@@ -56786,5 +56807,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=74459B5B17C0125864756E2164756E21
+//# debugId=E56A9EC57F4EC2E364756E2164756E21
 //# sourceMappingURL=extension.js.map

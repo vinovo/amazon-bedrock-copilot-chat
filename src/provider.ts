@@ -667,24 +667,54 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     token: CancellationToken,
   ): Promise<number> {
     // Fallback estimation function used when the CountTokens API is unavailable.
+    // Uses duck-typing in addition to `instanceof` because VSCode may pass plain-object
+    // messages (LanguageModelChatRequestMessage) whose parts lost their class prototypes
+    // crossing the RPC boundary. Relying on `instanceof` alone silently returns 0,
+    // causing the context indicator to always show 0%.
     const estimateTokens = (input: LanguageModelChatMessage | string): number => {
       if (typeof input === "string") {
         return Math.ceil(input.length / 4);
       }
       let totalTokens = 0;
-      for (const part of input.content) {
-        if (part instanceof vscode.LanguageModelTextPart) {
-          // Plain text: standard char/4 heuristic
-          totalTokens += Math.ceil(part.value.length / 4);
-        } else if (part instanceof vscode.LanguageModelToolCallPart) {
-          // Tool name + JSON-serialized input arguments
-          const inputStr = JSON.stringify(part.input) ?? "";
-          totalTokens += Math.ceil((part.name.length + inputStr.length) / 4);
-        } else if (part instanceof vscode.LanguageModelToolResultPart) {
-          // Recursively count text parts inside the result; serialize unknowns as fallback
-          for (const item of part.content) {
-            if (item instanceof vscode.LanguageModelTextPart) {
-              totalTokens += Math.ceil(item.value.length / 4);
+      const content = Array.isArray(input?.content) ? input.content : [];
+      for (const rawPart of content) {
+        const part = rawPart as unknown as Record<string, unknown>;
+
+        // Text part: has string `value`, no `name`, no `callId`
+        if (
+          part instanceof vscode.LanguageModelTextPart ||
+          (typeof part?.value === "string" && !("name" in part) && !("callId" in part))
+        ) {
+          const value = (part as unknown as vscode.LanguageModelTextPart).value ?? "";
+          totalTokens += Math.ceil(value.length / 4);
+          continue;
+        }
+
+        // Tool call part: has `name` + `input`
+        if (
+          part instanceof vscode.LanguageModelToolCallPart ||
+          (typeof part?.name === "string" && "input" in part)
+        ) {
+          const p = part as unknown as vscode.LanguageModelToolCallPart;
+          const inputStr = p.input === undefined ? "" : (JSON.stringify(p.input) ?? "");
+          totalTokens += Math.ceil(((p.name?.length ?? 0) + inputStr.length) / 4);
+          continue;
+        }
+
+        // Tool result part: has `callId` + array `content`
+        if (
+          part instanceof vscode.LanguageModelToolResultPart ||
+          (typeof part?.callId === "string" && Array.isArray(part?.content))
+        ) {
+          const items = (part as unknown as vscode.LanguageModelToolResultPart).content ?? [];
+          for (const rawItem of items) {
+            const item = rawItem as unknown as Record<string, unknown>;
+            if (
+              item instanceof vscode.LanguageModelTextPart ||
+              typeof item?.value === "string"
+            ) {
+              const value = (item as unknown as vscode.LanguageModelTextPart).value ?? "";
+              totalTokens += Math.ceil(value.length / 4);
             } else {
               try {
                 totalTokens += Math.ceil(JSON.stringify(item).length / 4);
@@ -693,22 +723,34 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
               }
             }
           }
-        } else if (
+          continue;
+        }
+
+        // Data part (image or binary) — has `data` (Uint8Array) + `mimeType`
+        if (
           typeof part === "object" &&
           part !== null &&
           "data" in part &&
           "mimeType" in part
         ) {
-          // LanguageModelDataPart (duck-typed to avoid runtime class availability issues)
-          const dataPart = part as { data: Uint8Array; mimeType: string };
-          if (dataPart.mimeType.startsWith("image/")) {
+          const dataPart = part as unknown as { data: Uint8Array; mimeType: string };
+          const byteLength = dataPart.data?.length ?? 0;
+          if (typeof dataPart.mimeType === "string" && dataPart.mimeType.startsWith("image/")) {
             // Amortized estimate: (bytes × 15px/byte) / 750px/token = bytes / 50
             // Capped at 1600 — Claude's hard maximum per image regardless of dimensions
-            totalTokens += Math.min(Math.ceil(dataPart.data.length / 50), 1600);
+            totalTokens += Math.min(Math.ceil(byteLength / 50), 1600);
           } else {
             // Non-image binary (e.g. application/json): treat bytes as text chars
-            totalTokens += Math.ceil(dataPart.data.length / 4);
+            totalTokens += Math.ceil(byteLength / 4);
           }
+          continue;
+        }
+
+        // Unknown part shape — fall back to JSON-serialization length
+        try {
+          totalTokens += Math.ceil(JSON.stringify(part).length / 4);
+        } catch {
+          totalTokens += 50;
         }
       }
       return totalTokens;
@@ -772,8 +814,11 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         }
 
         // Fall back to estimation if CountTokens is not available
-        logger.debug("[Bedrock Model Provider] CountTokens not available, using estimation");
-        return estimateTokens(text);
+        const estimate = estimateTokens(text);
+        logger.debug(
+          `[Bedrock Model Provider] CountTokens not available, using estimation: ${estimate}`,
+        );
+        return estimate;
       } finally {
         cancellationListener.dispose();
       }
