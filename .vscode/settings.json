@@ -42,5 +42,8 @@
   "coderabbit.autoReviewMode": "disabled",
   "npm.packageManager": "bun",
   "typescript.native-preview.tsdk": "./node_modules/@typescript/native-preview/bin",
-  "typescript.experimental.useTsgo": true
+  "typescript.experimental.useTsgo": true,
+  "chat.tools.terminal.autoApprove": {
+    "ForEach-Object": true
+  }
 }

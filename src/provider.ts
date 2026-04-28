@@ -666,55 +666,36 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     text: LanguageModelChatMessage | string,
     token: CancellationToken,
   ): Promise<number> {
-    // Fallback estimation function used when the CountTokens API is unavailable.
-    // Uses duck-typing in addition to `instanceof` because VSCode may pass plain-object
-    // messages (LanguageModelChatRequestMessage) whose parts lost their class prototypes
-    // crossing the RPC boundary. Relying on `instanceof` alone silently returns 0,
-    // causing the context indicator to always show 0%.
+    // NOTE: The chat context window tracker (the "X / Y tokens" badge in Copilot Chat)
+    // cannot currently be populated by 3rd-party `LanguageModelChatProvider` extensions.
+    // The `Progress<LanguageModelResponsePart2>` stream passed to
+    // `provideLanguageModelChatResponse` does not support a usage/tokens part type,
+    // and `provideTokenCount` below is only used by Copilot Chat internally for
+    // prompt-shaping decisions — not for the context widget. Copilot Chat's built-in
+    // BYOK providers populate the widget via the internal `stream.usage(...)` call on
+    // `ChatResponseStream` (see `chatParticipantAdditions` proposed API), which is
+    // only available to chat participants (`vscode.chat.createChatParticipant`).
+    //
+    // Upstream tracking: file an issue at https://github.com/microsoft/vscode
+    // requesting usage reporting for `LanguageModelChatProvider`.
+
+    // Fallback estimation when the Bedrock CountTokens API is unavailable
+    // (e.g. IAM lacks `bedrock:CountTokens`).
     const estimateTokens = (input: LanguageModelChatMessage | string): number => {
       if (typeof input === "string") {
         return Math.ceil(input.length / 4);
       }
       let totalTokens = 0;
-      const content = Array.isArray(input?.content) ? input.content : [];
-      for (const rawPart of content) {
-        const part = rawPart as unknown as Record<string, unknown>;
-
-        // Text part: has string `value`, no `name`, no `callId`
-        if (
-          part instanceof vscode.LanguageModelTextPart ||
-          (typeof part?.value === "string" && !("name" in part) && !("callId" in part))
-        ) {
-          const value = (part as unknown as vscode.LanguageModelTextPart).value ?? "";
-          totalTokens += Math.ceil(value.length / 4);
-          continue;
-        }
-
-        // Tool call part: has `name` + `input`
-        if (
-          part instanceof vscode.LanguageModelToolCallPart ||
-          (typeof part?.name === "string" && "input" in part)
-        ) {
-          const p = part as unknown as vscode.LanguageModelToolCallPart;
-          const inputStr = p.input === undefined ? "" : (JSON.stringify(p.input) ?? "");
-          totalTokens += Math.ceil(((p.name?.length ?? 0) + inputStr.length) / 4);
-          continue;
-        }
-
-        // Tool result part: has `callId` + array `content`
-        if (
-          part instanceof vscode.LanguageModelToolResultPart ||
-          (typeof part?.callId === "string" && Array.isArray(part?.content))
-        ) {
-          const items = (part as unknown as vscode.LanguageModelToolResultPart).content ?? [];
-          for (const rawItem of items) {
-            const item = rawItem as unknown as Record<string, unknown>;
-            if (
-              item instanceof vscode.LanguageModelTextPart ||
-              typeof item?.value === "string"
-            ) {
-              const value = (item as unknown as vscode.LanguageModelTextPart).value ?? "";
-              totalTokens += Math.ceil(value.length / 4);
+      for (const part of input.content) {
+        if (part instanceof vscode.LanguageModelTextPart) {
+          totalTokens += Math.ceil(part.value.length / 4);
+        } else if (part instanceof vscode.LanguageModelToolCallPart) {
+          const inputStr = JSON.stringify(part.input) ?? "";
+          totalTokens += Math.ceil((part.name.length + inputStr.length) / 4);
+        } else if (part instanceof vscode.LanguageModelToolResultPart) {
+          for (const item of part.content) {
+            if (item instanceof vscode.LanguageModelTextPart) {
+              totalTokens += Math.ceil(item.value.length / 4);
             } else {
               try {
                 totalTokens += Math.ceil(JSON.stringify(item).length / 4);
@@ -723,57 +704,39 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
               }
             }
           }
-          continue;
-        }
-
-        // Data part (image or binary) — has `data` (Uint8Array) + `mimeType`
-        if (
+        } else if (
           typeof part === "object" &&
           part !== null &&
           "data" in part &&
           "mimeType" in part
         ) {
-          const dataPart = part as unknown as { data: Uint8Array; mimeType: string };
-          const byteLength = dataPart.data?.length ?? 0;
-          if (typeof dataPart.mimeType === "string" && dataPart.mimeType.startsWith("image/")) {
+          // LanguageModelDataPart (duck-typed to avoid runtime class availability issues)
+          const dataPart = part as { data: Uint8Array; mimeType: string };
+          if (dataPart.mimeType.startsWith("image/")) {
             // Amortized estimate: (bytes × 15px/byte) / 750px/token = bytes / 50
             // Capped at 1600 — Claude's hard maximum per image regardless of dimensions
-            totalTokens += Math.min(Math.ceil(byteLength / 50), 1600);
+            totalTokens += Math.min(Math.ceil(dataPart.data.length / 50), 1600);
           } else {
-            // Non-image binary (e.g. application/json): treat bytes as text chars
-            totalTokens += Math.ceil(byteLength / 4);
+            // Non-image binary: treat bytes as text chars
+            totalTokens += Math.ceil(dataPart.data.length / 4);
           }
-          continue;
-        }
-
-        // Unknown part shape — fall back to JSON-serialization length
-        try {
-          totalTokens += Math.ceil(JSON.stringify(part).length / 4);
-        } catch {
-          totalTokens += 50;
         }
       }
       return totalTokens;
     };
 
     try {
-      // Create AbortController for cancellation support
       const abortController = new AbortController();
       const cancellationListener = token.onCancellationRequested(() => {
         abortController.abort();
       });
 
-      // Resolve model ID for application inference profiles (ARNs) to base model ID
-      // This is needed because convertMessages calls getModelProfile which expects base model IDs
+      // Resolve model ID for application inference profiles (ARNs) to base model ID.
+      // convertMessages calls getModelProfile which expects base model IDs.
       let baseModelId: string;
       try {
         baseModelId = await this.client.resolveModelId(model.id, abortController.signal);
-        logger.debug("[Bedrock Model Provider] Resolved model ID", {
-          originalModelId: model.id,
-          resolvedBaseModelId: baseModelId,
-        });
       } catch (error) {
-        // If resolution fails, use the original model ID
         baseModelId = model.id;
         logger.warn("[Bedrock Model Provider] Failed to resolve model ID, using original", {
           error: error instanceof Error ? error.message : String(error),
@@ -782,12 +745,12 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       }
 
       try {
-        // For simple string input, use estimation (CountTokens API expects structured messages)
+        // CountTokens API expects structured messages; fall back to char-based estimation
+        // for simple string inputs.
         if (typeof text === "string") {
           return estimateTokens(text);
         }
 
-        // Convert the message to Bedrock format
         const settings = await getBedrockSettings(this.globalState);
         const converted = convertMessages([text], baseModelId, {
           extendedThinkingEnabled: false,
@@ -795,7 +758,6 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           promptCachingEnabled: settings.promptCaching.enabled,
         });
 
-        // Use the CountTokens API
         const tokenCount = await this.client.countTokens(
           model.id,
           {
@@ -807,26 +769,17 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           abortController.signal,
         );
 
-        // If CountTokens API is available, use its result
         if (tokenCount !== undefined) {
-          logger.debug(`[Bedrock Model Provider] Token count from API: ${tokenCount}`);
           return tokenCount;
         }
 
-        // Fall back to estimation if CountTokens is not available
-        const estimate = estimateTokens(text);
-        logger.debug(
-          `[Bedrock Model Provider] CountTokens not available, using estimation: ${estimate}`,
-        );
-        return estimate;
+        // CountTokens API unavailable (e.g. IAM denial) — use local estimation.
+        return estimateTokens(text);
       } finally {
         cancellationListener.dispose();
       }
     } catch (error) {
-      // If there's any error (including cancellation), fall back to estimation
-      if (error instanceof Error && error.name === "AbortError") {
-        logger.debug("[Bedrock Model Provider] Token count cancelled, using estimation");
-      } else {
+      if (!(error instanceof Error && error.name === "AbortError")) {
         logger.warn("[Bedrock Model Provider] Token count failed, using estimation", error);
       }
       return estimateTokens(text);
