@@ -668,16 +668,14 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   ): Promise<number> {
     // NOTE: The chat context window tracker (the "X / Y tokens" badge in Copilot Chat)
     // cannot currently be populated by 3rd-party `LanguageModelChatProvider` extensions.
-    // The `Progress<LanguageModelResponsePart2>` stream passed to
-    // `provideLanguageModelChatResponse` does not support a usage/tokens part type,
-    // and `provideTokenCount` below is only used by Copilot Chat internally for
-    // prompt-shaping decisions — not for the context widget. Copilot Chat's built-in
-    // BYOK providers populate the widget via the internal `stream.usage(...)` call on
-    // `ChatResponseStream` (see `chatParticipantAdditions` proposed API), which is
-    // only available to chat participants (`vscode.chat.createChatParticipant`).
+    // Copilot Chat's internal wrapper for non-Copilot providers hardcodes
+    // `usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }`, regardless
+    // of what the provider returns. `provideTokenCount` below IS called (many times per
+    // turn) and is used for prompt-shaping decisions, but its return value never reaches
+    // the context widget.
     //
-    // Upstream tracking: file an issue at https://github.com/microsoft/vscode
-    // requesting usage reporting for `LanguageModelChatProvider`.
+    // Upstream tracking: https://github.com/microsoft/vscode/issues/309207
+    // Related: https://github.com/microsoft/vscode/issues/295106
 
     // Fallback estimation when the Bedrock CountTokens API is unavailable
     // (e.g. IAM lacks `bedrock:CountTokens`).
