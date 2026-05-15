@@ -346,7 +346,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
               name: "do_something",
             },
           ],
-        } as vscode.LanguageModelChatRequestOptions,
+        } as vscode.ProvideLanguageModelChatResponseOptions,
         "test.model-id",
       );
 
@@ -379,7 +379,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
               name: "only_tool",
             },
           ],
-        } as vscode.LanguageModelChatRequestOptions,
+        } as vscode.ProvideLanguageModelChatResponseOptions,
         "anthropic.claude-3-5-sonnet-20241022-v2:0",
       );
 
@@ -399,7 +399,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
               name: "my_tool",
             },
           ],
-        } as vscode.LanguageModelChatRequestOptions,
+        } as vscode.ProvideLanguageModelChatResponseOptions,
         "anthropic.claude-3-5-sonnet-20241022-v2:0",
       );
 
@@ -411,8 +411,9 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     test("convertTools returns undefined when no tools provided", () => {
       const out = convertTools(
         {
+          toolMode: vscode.LanguageModelChatToolMode.Auto,
           tools: [],
-        } as vscode.LanguageModelChatRequestOptions,
+        } as vscode.ProvideLanguageModelChatResponseOptions,
         "test.model-id",
       );
 

@@ -6,7 +6,7 @@ import type {
 } from "@aws-sdk/client-bedrock-runtime";
 import { GuardrailContentPolicyAction, StopReason } from "@aws-sdk/client-bedrock-runtime";
 import * as vscode from "vscode";
-import { type CancellationToken, type LanguageModelResponsePart2, type Progress } from "vscode";
+import { type CancellationToken, type LanguageModelResponsePart, type Progress } from "vscode";
 
 import { logger } from "./logger";
 import { ToolBuffer } from "./tool-buffer";
@@ -14,10 +14,23 @@ import { ToolBuffer } from "./tool-buffer";
 export interface StreamProcessingResult {
   thinkingBlock?: ThinkingBlock;
   /** Actual token usage reported by the Bedrock API in the stream metadata event */
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-  };
+  usage?: StreamUsage;
+}
+
+/**
+ * Actual token usage reported by the Bedrock API in the stream metadata event.
+ *
+ * Field semantics mirror the Bedrock `ConverseStreamMetadataEvent.usage` shape
+ * (see @aws-sdk/client-bedrock-runtime). All fields except `inputTokens` and
+ * `outputTokens` may be undefined depending on the model and whether prompt
+ * caching is enabled.
+ */
+export interface StreamUsage {
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens?: number;
 }
 
 export interface ThinkingBlock {
@@ -34,13 +47,13 @@ interface ProcessingState {
   textChunkCount: number;
   toolBuffer: ToolBuffer;
   toolCallCount: number;
-  usage: undefined | { inputTokens: number; outputTokens: number };
+  usage: StreamUsage | undefined;
 }
 
 export class StreamProcessor {
   async processStream(
     stream: AsyncIterable<ConverseStreamOutput>,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     token: CancellationToken,
   ): Promise<StreamProcessingResult> {
     const state: ProcessingState = {
@@ -124,7 +137,7 @@ export class StreamProcessor {
 
   private handleContentBlockDelta(
     delta: NonNullable<ConverseStreamOutput["contentBlockDelta"]>,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     state: ProcessingState,
   ): void {
     if ("text" in (delta.delta ?? {})) {
@@ -159,7 +172,7 @@ export class StreamProcessor {
 
   private handleContentBlockStop(
     stop: NonNullable<ConverseStreamOutput["contentBlockStop"]>,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     state: ProcessingState,
   ): void {
     logger.info("[Stream Processor] Content block stop, index:", stop.contentBlockIndex);
@@ -187,7 +200,7 @@ export class StreamProcessor {
 
   private handleEvent(
     event: ConverseStreamOutput,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     state: ProcessingState,
   ): void {
     if (event.messageStart) {
@@ -239,11 +252,17 @@ export class StreamProcessor {
   ): void {
     logger.info("[Stream Processor] Metadata received:", metadata);
 
-    // Capture actual token usage from the stream for context-window tracking
+    // Capture actual token usage from the stream for context-window tracking.
+    // `inputTokens` and `outputTokens` are required; the rest are optional and
+    // only populated for models / configurations that report them (e.g. Claude
+    // and Nova with prompt caching enabled return cache* fields).
     if (metadata?.usage?.inputTokens !== undefined && metadata?.usage?.outputTokens !== undefined) {
       state.usage = {
+        cacheReadInputTokens: metadata.usage.cacheReadInputTokens,
+        cacheWriteInputTokens: metadata.usage.cacheWriteInputTokens,
         inputTokens: metadata.usage.inputTokens,
         outputTokens: metadata.usage.outputTokens,
+        totalTokens: metadata.usage.totalTokens,
       };
       logger.debug("[Stream Processor] Token usage from stream:", state.usage);
     }
@@ -272,7 +291,7 @@ export class StreamProcessor {
 
   private handleReasoningDelta(
     reasoningContent: ReasoningContentBlockDelta | undefined,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     state: ProcessingState,
   ): void {
     const rawReasoningText: unknown = reasoningContent?.text;
@@ -293,8 +312,15 @@ export class StreamProcessor {
       // 2. The trackingProgress wrapper re-throws on failure, so catching here
       //    ensures hasEmittedThinking is only set when emission actually succeeded
       try {
-        if (typeof vscode.LanguageModelThinkingPart === "function") {
-          progress.report(new vscode.LanguageModelThinkingPart(reasoningText));
+        // `LanguageModelThinkingPart` is a proposed API and is not present in
+        // the stable type surface (`vscode.d.ts`). We probe for it at runtime
+        // and skip emission when unavailable. Cast through `unknown` because
+        // the symbol is intentionally absent from the typed `vscode` namespace.
+        const ThinkingPart = (vscode as unknown as Record<string, unknown>)
+          .LanguageModelThinkingPart;
+        if (typeof ThinkingPart === "function") {
+          const Ctor = ThinkingPart as new (text: string) => unknown;
+          progress.report(new Ctor(reasoningText) as LanguageModelResponsePart);
           // Only reached when progress.report didn't throw — the UI accepted the part.
           state.hasEmittedThinking = true;
         }
@@ -336,7 +362,7 @@ export class StreamProcessor {
 
   private handleTextDelta(
     text: string | undefined,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     state: ProcessingState,
   ): void {
     if (typeof text === "string" && text) {
@@ -386,7 +412,7 @@ export class StreamProcessor {
 
   private handleToolUseDelta(
     delta: NonNullable<ConverseStreamOutput["contentBlockDelta"]>,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     state: ProcessingState,
   ): void {
     const toolUse = delta.delta?.toolUse;
@@ -421,7 +447,7 @@ export class StreamProcessor {
 
   private tryEarlyToolEmission(
     contentBlockIndex: number,
-    progress: Progress<LanguageModelResponsePart2>,
+    progress: Progress<LanguageModelResponsePart>,
     state: ProcessingState,
   ): void {
     if (state.toolBuffer.isEmitted(contentBlockIndex)) {

@@ -40,6 +40,8 @@ export class BedrockAPIClient {
   private authConfig?: AuthConfig;
   private bedrockClient: BedrockClient;
   private bedrockRuntimeClient: BedrockRuntimeClient;
+  // Tracks whether CountTokens API is available (circuit breaker to avoid repeated permission failures)
+  private countTokensAvailable: boolean | undefined = undefined;
   // Tracks base model IDs detected when no inference profile is accessible
   private readonly fallbackBaseModelIds = new Set<string>();
   // Tracks which inference profile IDs we were able to detect when ListFoundationModels is denied
@@ -48,11 +50,9 @@ export class BedrockAPIClient {
   // This avoids repeated API calls to GetInferenceProfile
   private readonly inferenceProfileCache = new Map<string, string>();
   private readonly profileCredentialsProviders = new Map<string, AwsCredentialIdentityProvider>();
-  private profileName?: string;
 
+  private profileName?: string;
   private region: string;
-  // Tracks whether CountTokens API is available (circuit breaker to avoid repeated permission failures)
-  private countTokensAvailable: boolean | undefined = undefined;
 
   constructor(region: string, profileName?: string) {
     this.region = region;
@@ -775,6 +775,30 @@ export class BedrockAPIClient {
     return wrapped;
   }
 
+  /**
+   * Normalize an inference profile ID to a base model ID by stripping the prefix.
+   * Handles regional prefixes (us., eu., ap., etc.) and global prefix (global.)
+   *
+   * Examples:
+   * - "global.anthropic.claude-sonnet-4-6" → "anthropic.claude-sonnet-4-6"
+   * - "us.anthropic.claude-opus-4-5-20251101-v1:0" → "anthropic.claude-opus-4-5-20251101-v1:0"
+   * - "anthropic.claude-sonnet-4-6" → "anthropic.claude-sonnet-4-6" (no change)
+   *
+   * @param modelId The model ID or inference profile ID
+   * @returns The base model ID without inference profile prefix
+   */
+  private normalizeInferenceProfileId(modelId: string): string {
+    const parts = modelId.split(".");
+    // Check if it starts with a regional prefix (2-3 letter code) or "global"
+    if (
+      parts.length > 2 &&
+      (parts[0].length === 2 || parts[0].length === 3 || parts[0] === "global")
+    ) {
+      return parts.slice(1).join(".");
+    }
+    return modelId;
+  }
+
   private recreateClients(): void {
     this.bedrockClient = new BedrockClient(this.getClientConfig());
     this.bedrockRuntimeClient = new BedrockRuntimeClient(this.getClientConfig());
@@ -839,30 +863,6 @@ export class BedrockAPIClient {
    */
   private async testModelAccess(modelId: string, abortSignal?: AbortSignal): Promise<boolean> {
     return this.testAccessViaConverse(modelId, "Model", abortSignal);
-  }
-
-  /**
-   * Normalize an inference profile ID to a base model ID by stripping the prefix.
-   * Handles regional prefixes (us., eu., ap., etc.) and global prefix (global.)
-   *
-   * Examples:
-   * - "global.anthropic.claude-sonnet-4-6" → "anthropic.claude-sonnet-4-6"
-   * - "us.anthropic.claude-opus-4-5-20251101-v1:0" → "anthropic.claude-opus-4-5-20251101-v1:0"
-   * - "anthropic.claude-sonnet-4-6" → "anthropic.claude-sonnet-4-6" (no change)
-   *
-   * @param modelId The model ID or inference profile ID
-   * @returns The base model ID without inference profile prefix
-   */
-  private normalizeInferenceProfileId(modelId: string): string {
-    const parts = modelId.split(".");
-    // Check if it starts with a regional prefix (2-3 letter code) or "global"
-    if (
-      parts.length > 2 &&
-      (parts[0].length === 2 || parts[0].length === 3 || parts[0] === "global")
-    ) {
-      return parts.slice(1).join(".");
-    }
-    return modelId;
   }
 }
 

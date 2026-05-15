@@ -12,6 +12,12 @@ export interface ModelProfile {
    */
   supports1MContext: boolean;
   /**
+   * Whether the model uses adaptive thinking only (thinking.type: "adaptive"), without budget_tokens.
+   * Claude Opus 4.7 uses this mode exclusively; temperature/top_p/top_k are also unsupported.
+   * See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+   */
+  supportsAdaptiveThinkingOnly: boolean;
+  /**
    * Whether the model supports caching with tool results (cachePoint after toolResult blocks)
    * When false, cachePoint should only be added to messages WITHOUT toolResult
    * Reference: Amazon Nova models don't support cachePoint after toolResult
@@ -25,12 +31,6 @@ export interface ModelProfile {
    * Whether the model supports extended thinking (Claude Opus 4.6, Opus 4.5, Opus 4.1, Opus 4, Sonnet 4.6, Sonnet 4.5, Sonnet 4, Sonnet 3.7)
    */
   supportsThinking: boolean;
-  /**
-   * Whether the model uses adaptive thinking only (thinking.type: "adaptive"), without budget_tokens.
-   * Claude Opus 4.7 uses this mode exclusively; temperature/top_p/top_k are also unsupported.
-   * See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
-   */
-  supportsAdaptiveThinkingOnly: boolean;
   /**
    * Whether the model supports the adaptive thinking / thinking effort parameter (Claude Opus 4.6, Opus 4.5, Sonnet 4.6)
    * Allows controlling token expenditure with "high", "medium", or "low" effort levels
@@ -67,10 +67,10 @@ export function getModelProfile(modelId: string): ModelProfile {
   const defaultProfile: ModelProfile = {
     requiresInterleavedThinkingHeader: false,
     supports1MContext: false,
+    supportsAdaptiveThinkingOnly: false,
     supportsCachingWithToolResults: false,
     supportsPromptCaching: false,
     supportsThinking: false,
-    supportsAdaptiveThinkingOnly: false,
     supportsThinkingEffort: false,
     supportsToolChoice: false,
     supportsToolResultStatus: false,
@@ -103,10 +103,10 @@ export function getModelProfile(modelId: string): ModelProfile {
         return {
           requiresInterleavedThinkingHeader: false,
           supports1MContext: false,
+          supportsAdaptiveThinkingOnly: false,
           supportsCachingWithToolResults: false,
           supportsPromptCaching: true,
           supportsThinking: false,
-          supportsAdaptiveThinkingOnly: false,
           supportsThinkingEffort: false,
           supportsToolChoice: true,
           supportsToolResultStatus: false,
@@ -155,10 +155,10 @@ export function getModelProfile(modelId: string): ModelProfile {
       return {
         requiresInterleavedThinkingHeader,
         supports1MContext: supports1MContext(modelId),
+        supportsAdaptiveThinkingOnly,
         supportsCachingWithToolResults,
         supportsPromptCaching: true,
         supportsThinking,
-        supportsAdaptiveThinkingOnly,
         supportsThinkingEffort,
         supportsToolChoice: true,
         supportsToolResultStatus: true, // Claude models support status field in tool results
@@ -170,10 +170,10 @@ export function getModelProfile(modelId: string): ModelProfile {
       return {
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
+        supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
-        supportsAdaptiveThinkingOnly: false,
         supportsThinkingEffort: false,
         supportsToolChoice: false,
         supportsToolResultStatus: false,
@@ -186,10 +186,10 @@ export function getModelProfile(modelId: string): ModelProfile {
       return {
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
+        supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
-        supportsAdaptiveThinkingOnly: false,
         supportsThinkingEffort: false,
         supportsToolChoice: true,
         supportsToolResultStatus: false,

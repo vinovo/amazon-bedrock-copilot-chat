@@ -73,7 +73,7 @@
         },
         "bedrock.thinking.budgetTokens": {
           "type": "number",
-          "default": 10000,
+          "default": 1e4,
           "minimum": 1024,
           "description": "Number of tokens allocated for thinking. Minimum 1024. Note: For Anthropic Claude models, this is automatically calculated as 20% of the model's maximum output tokens and this setting is ignored.",
           "scope": "resource"
@@ -131,7 +131,8 @@
     "download-api": "dts dev",
     "postdownload-api": "dts main",
     "postinstall": "bun run download-api",
-    "compile": "bun build --outdir ./dist --target=node --external=vscode --sourcemap=linked --format=cjs ./src/extension.ts",
+    "copy-tokenizer-assets": "node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('src/tokenizer/o200k_base.tiktoken','dist/o200k_base.tiktoken')\"",
+    "compile": "bun build --outdir ./dist --target=node --external=vscode --sourcemap=linked --format=cjs ./src/extension.ts && bun run copy-tokenizer-assets",
     "check-types": "tsgo --noEmit",
     "lint": "eslint",
     "format": "prettier --write .",
@@ -147,6 +148,7 @@
     "@aws-sdk/client-ssm": "^3.1029.0",
     "@aws-sdk/credential-providers": "^3.1029.0",
     "@aws-sdk/protocol-http": "^3.374.0",
+    "@microsoft/tiktokenizer": "^1.0.10",
     "@smithy/shared-ini-file-loader": "^4.4.8",
     "@smithy/util-retry": "^4.3.1",
     "smithy-node-native-fetch": "^1.2.1"

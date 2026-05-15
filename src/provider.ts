@@ -10,10 +10,9 @@ import { inspect, MIMEType } from "node:util";
 import type {
   CancellationToken,
   LanguageModelChatInformation,
-  LanguageModelChatMessage,
   LanguageModelChatProvider,
+  LanguageModelChatRequestMessage,
   LanguageModelResponsePart,
-  LanguageModelResponsePart2,
   Progress,
 } from "vscode";
 import * as vscode from "vscode";
@@ -26,15 +25,9 @@ import { logger } from "./logger";
 import { getModelProfile, getModelTokenLimits } from "./profiles";
 import { getBedrockSettings } from "./settings";
 import { StreamProcessor, type ThinkingBlock } from "./stream-processor";
+import { countMessageTokens, countStringTokens } from "./tokenizer";
 import type { AuthConfig, AuthMethod, BedrockModelSummary } from "./types";
 import { validateBedrockMessages } from "./validation";
-
-class NoAccessibleModelsError extends Error {
-  constructor() {
-    super("No accessible Bedrock models detected");
-    this.name = "NoAccessibleModelsError";
-  }
-}
 
 /**
  * Extends the stable `LanguageModelChatInformation` with fields that VS Code's chat
@@ -50,9 +43,16 @@ class NoAccessibleModelsError extends Error {
  *   fall under "Other Models" (collapsed, ordered last).
  */
 type BedrockLanguageModelChatInformation = LanguageModelChatInformation & {
-  readonly isUserSelectable?: boolean;
   readonly category?: { label: string; order: number };
+  readonly isUserSelectable?: boolean;
 };
+
+class NoAccessibleModelsError extends Error {
+  constructor() {
+    super("No accessible Bedrock models detected");
+    this.name = "NoAccessibleModelsError";
+  }
+}
 
 const BEDROCK_MODEL_PICKER_CATEGORY = { label: "Amazon Bedrock", order: 50 } as const;
 
@@ -454,15 +454,15 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   // eslint-disable-next-line sonarjs/cognitive-complexity -- Chat response handling requires validation of thinking config and error handling
   async provideLanguageModelChatResponse(
     model: LanguageModelChatInformation,
-    messages: readonly LanguageModelChatMessage[],
+    messages: readonly LanguageModelChatRequestMessage[],
     options: Parameters<LanguageModelChatProvider["provideLanguageModelChatResponse"]>[2],
     progress: Progress<LanguageModelResponsePart>,
     token: CancellationToken,
   ): Promise<void> {
-    const trackingProgress: Progress<LanguageModelResponsePart2> = {
+    const trackingProgress: Progress<LanguageModelResponsePart> = {
       report: (part) => {
         try {
-          progress.report(part as LanguageModelResponsePart);
+          progress.report(part);
         } catch (error) {
           logger.warn("[Bedrock Model Provider] Progress.report failed", {
             error:
@@ -687,64 +687,38 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
 
   async provideTokenCount(
     model: LanguageModelChatInformation,
-    text: LanguageModelChatMessage | string,
+    text: LanguageModelChatRequestMessage | string,
     token: CancellationToken,
   ): Promise<number> {
-    // NOTE: The chat context window tracker (the "X / Y tokens" badge in Copilot Chat)
-    // cannot currently be populated by 3rd-party `LanguageModelChatProvider` extensions.
-    // Copilot Chat's internal wrapper for non-Copilot providers hardcodes
-    // `usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }`, regardless
-    // of what the provider returns. `provideTokenCount` below IS called (many times per
-    // turn) and is used for prompt-shaping decisions, but its return value never reaches
-    // the context widget.
+    // The chat context window tracker (the "X / Y tokens" badge in Copilot Chat)
+    // is populated separately from this method.
     //
-    // Upstream tracking: https://github.com/microsoft/vscode/issues/309207
-    // Related: https://github.com/microsoft/vscode/issues/295106
+    // Until VS Code 1.120.0, third-party `LanguageModelChatProvider` extensions
+    // could not report usage to the badge — Copilot Chat hardcoded
+    // `usage: { prompt_tokens: 0, ... }` for all non-Copilot providers. That
+    // limitation was lifted in VS Code 1.120.0 / Copilot Chat 1.120.0:
+    //
+    //   Issue:    https://github.com/microsoft/vscode/issues/291100
+    //   Fix PR:   https://github.com/microsoft/vscode/pull/315394
+    //
+    // We now emit a `LanguageModelDataPart` with MIME `"usage"` from
+    // `processResponseStream` once Bedrock's stream metadata event arrives
+    // (see `processResponseStream` and `StreamProcessor.handleMetadata`). That
+    // data part feeds the badge with the *exact* token counts reported by
+    // Bedrock, so this method's return value is **not** displayed in the badge.
+    //
+    // `provideTokenCount` IS still called many times per turn by Copilot's
+    // prompt-shaping logic (it's the only thing that decides what fits in the
+    // context window before the request is sent). Accuracy here matters for
+    // avoiding context-overflow errors from Bedrock at request time — see the
+    // `isContextWindowOverflowError` defense in `provideLanguageModelChatResponse`.
 
     // Fallback estimation when the Bedrock CountTokens API is unavailable
-    // (e.g. IAM lacks `bedrock:CountTokens`).
-    const estimateTokens = (input: LanguageModelChatMessage | string): number => {
-      if (typeof input === "string") {
-        return Math.ceil(input.length / 4);
-      }
-      let totalTokens = 0;
-      for (const part of input.content) {
-        if (part instanceof vscode.LanguageModelTextPart) {
-          totalTokens += Math.ceil(part.value.length / 4);
-        } else if (part instanceof vscode.LanguageModelToolCallPart) {
-          const inputStr = JSON.stringify(part.input) ?? "";
-          totalTokens += Math.ceil((part.name.length + inputStr.length) / 4);
-        } else if (part instanceof vscode.LanguageModelToolResultPart) {
-          for (const item of part.content) {
-            if (item instanceof vscode.LanguageModelTextPart) {
-              totalTokens += Math.ceil(item.value.length / 4);
-            } else {
-              try {
-                totalTokens += Math.ceil(JSON.stringify(item).length / 4);
-              } catch {
-                totalTokens += 100; // safe minimum for unserializable content
-              }
-            }
-          }
-        } else if (
-          typeof part === "object" &&
-          part !== null &&
-          "data" in part &&
-          "mimeType" in part
-        ) {
-          // LanguageModelDataPart (duck-typed to avoid runtime class availability issues)
-          const dataPart = part as { data: Uint8Array; mimeType: string };
-          if (dataPart.mimeType.startsWith("image/")) {
-            // Amortized estimate: (bytes × 15px/byte) / 750px/token = bytes / 50
-            // Capped at 1600 — Claude's hard maximum per image regardless of dimensions
-            totalTokens += Math.min(Math.ceil(dataPart.data.length / 50), 1600);
-          } else {
-            // Non-image binary: treat bytes as text chars
-            totalTokens += Math.ceil(dataPart.data.length / 4);
-          }
-        }
-      }
-      return totalTokens;
+    // (e.g. IAM lacks `bedrock:CountTokens`). Delegates to the local
+    // `o200k_base` BPE tokenizer in `src/tokenizer.ts` — same approach
+    // Copilot Chat takes for non-Copilot first-party models.
+    const estimateTokens = (input: LanguageModelChatRequestMessage | string): number => {
+      return typeof input === "string" ? countStringTokens(input) : countMessageTokens(input);
     };
 
     try {
@@ -1464,7 +1438,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   /**
    * Log incoming VSCode messages for debugging and reproduction
    */
-  private logIncomingMessages(messages: readonly LanguageModelChatMessage[]): void {
+  private logIncomingMessages(messages: readonly LanguageModelChatRequestMessage[]): void {
     logger.info("[Bedrock Model Provider] === NEW REQUEST ===");
     logger.info("[Bedrock Model Provider] Converting messages, count:", messages.length);
 
@@ -1596,7 +1570,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
    */
   private async processResponseStream(
     requestInput: ConverseStreamCommandInput,
-    trackingProgress: Progress<LanguageModelResponsePart2>,
+    trackingProgress: Progress<LanguageModelResponsePart>,
     extendedThinkingEnabled: boolean,
     token: CancellationToken,
   ): Promise<void> {
@@ -1637,9 +1611,47 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       // Log actual token usage from the stream metadata for observability
       if (result.usage) {
         logger.info("[Bedrock Model Provider] Actual token usage from stream:", {
+          cacheReadInputTokens: result.usage.cacheReadInputTokens,
+          cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
+          totalTokens: result.usage.totalTokens,
         });
+
+        // Report usage to Copilot Chat for the context-window tracker badge.
+        //
+        // Convention: emit a `LanguageModelDataPart` whose payload is a UTF-8
+        // JSON-encoded `APIUsage`-shaped object (OpenAI naming) with MIME type
+        // "usage". Copilot Chat ≥ 1.120.0 (`ExtensionContributedChatEndpoint`)
+        // recognises this MIME type and feeds the numbers into the badge.
+        // Older clients silently drop unknown MIME types, so this is safe.
+        //
+        // See: https://github.com/microsoft/vscode/pull/315394
+        // See: extensions/copilot/src/platform/endpoint/common/endpointTypes.ts
+        //      (`CustomDataPartMimeTypes.Usage = 'usage'`)
+        try {
+          const apiUsage = {
+            completion_tokens: result.usage.outputTokens,
+            prompt_tokens: result.usage.inputTokens,
+            prompt_tokens_details: {
+              cached_tokens: result.usage.cacheReadInputTokens ?? 0,
+            },
+            total_tokens:
+              result.usage.totalTokens ?? result.usage.inputTokens + result.usage.outputTokens,
+          };
+          // `LanguageModelDataPart.json` UTF-8-encodes the value and creates a
+          // data part with the given MIME. Equivalent to constructing a part
+          // from `TextEncoder().encode(JSON.stringify(value))` but uses the
+          // public static factory API.
+          trackingProgress.report(vscode.LanguageModelDataPart.json(apiUsage, "usage"));
+        } catch (error) {
+          // Defensive: never let a usage-reporting issue break the response.
+          // This can happen on older VS Code builds where LanguageModelDataPart
+          // is unavailable, or if the progress channel has already been closed.
+          logger.debug("[Bedrock Model Provider] Failed to report usage data part", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
       logger.info("[Bedrock Model Provider] Finished processing stream");

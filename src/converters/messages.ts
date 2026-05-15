@@ -28,7 +28,7 @@ interface ImageDataPart {
  * Convert VSCode language model messages to Bedrock API format
  */
 export function convertMessages(
-  messages: readonly vscode.LanguageModelChatMessage[],
+  messages: readonly vscode.LanguageModelChatRequestMessage[],
   modelId: string,
   options?: {
     extendedThinkingEnabled?: boolean;
@@ -433,7 +433,7 @@ function mergeOrAppendMessage(
 /**
  * Process all parts of an assistant message
  */
-function processAssistantMessageParts(msg: vscode.LanguageModelChatMessage): ContentBlock[] {
+function processAssistantMessageParts(msg: vscode.LanguageModelChatRequestMessage): ContentBlock[] {
   const content: ContentBlock[] = [];
 
   for (const part of msg.content) {
@@ -489,7 +489,7 @@ function processImagePart(part: ImageDataPart, role: ConversationRole): ContentB
 /**
  * Process all parts of a system message
  */
-function processSystemMessageParts(msg: vscode.LanguageModelChatMessage): SystemContentBlock[] {
+function processSystemMessageParts(msg: vscode.LanguageModelChatRequestMessage): SystemContentBlock[] {
   const systemBlocks: SystemContentBlock[] = [];
 
   for (const part of msg.content) {
@@ -592,7 +592,7 @@ function processToolResultPart(
  * Process all parts of a user message
  */
 function processUserMessageParts(
-  msg: vscode.LanguageModelChatMessage,
+  msg: vscode.LanguageModelChatRequestMessage,
   profile: ModelProfile,
 ): { content: ContentBlock[]; hasToolResults: boolean } {
   const content: ContentBlock[] = [];

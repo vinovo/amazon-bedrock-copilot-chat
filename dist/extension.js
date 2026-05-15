@@ -6560,22 +6560,6 @@ var require_dist_cjs24 = __commonJS((exports2) => {
 var require_dist_cjs25 = __commonJS((exports2) => {
   var types = require_dist_cjs();
 
-  class BinaryDecisionDiagram {
-    nodes;
-    root;
-    conditions;
-    results;
-    constructor(bdd, root, conditions, results) {
-      this.nodes = bdd;
-      this.root = root;
-      this.conditions = conditions;
-      this.results = results;
-    }
-    static from(bdd, root, conditions, results) {
-      return new BinaryDecisionDiagram(bdd, root, conditions, results);
-    }
-  }
-
   class EndpointCache {
     capacity;
     data = new Map;
@@ -6626,13 +6610,22 @@ var require_dist_cjs25 = __commonJS((exports2) => {
       return buffer;
     }
   }
-
-  class EndpointError extends Error {
-    constructor(message) {
-      super(message);
-      this.name = "EndpointError";
+  var IP_V4_REGEX = new RegExp(`^(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)){3}$`);
+  var isIpAddress = (value) => IP_V4_REGEX.test(value) || value.startsWith("[") && value.endsWith("]");
+  var VALID_HOST_LABEL_REGEX = new RegExp(`^(?!.*-$)(?!-)[a-zA-Z0-9-]{1,63}$`);
+  var isValidHostLabel = (value, allowSubDomains = false) => {
+    if (!allowSubDomains) {
+      return VALID_HOST_LABEL_REGEX.test(value);
     }
-  }
+    const labels = value.split(".");
+    for (const label of labels) {
+      if (!isValidHostLabel(label)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  var customEndpointFunctions = {};
   var debugId = "endpoints";
   function toDebugString(input) {
     if (typeof input !== "object" || input == null) {
@@ -6646,16 +6639,14 @@ var require_dist_cjs25 = __commonJS((exports2) => {
     }
     return JSON.stringify(input, null, 2);
   }
-  var customEndpointFunctions = {};
-  var booleanEquals = (value1, value2) => value1 === value2;
-  function coalesce(...args) {
-    for (const arg of args) {
-      if (arg != null) {
-        return arg;
-      }
+
+  class EndpointError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "EndpointError";
     }
-    return;
   }
+  var booleanEquals = (value1, value2) => value1 === value2;
   var getAttrPathList = (path) => {
     const parts = path.split(".");
     const pathList = [];
@@ -6688,25 +6679,7 @@ var require_dist_cjs25 = __commonJS((exports2) => {
     return acc[index];
   }, value);
   var isSet = (value) => value != null;
-  var VALID_HOST_LABEL_REGEX = new RegExp(`^(?!.*-$)(?!-)[a-zA-Z0-9-]{1,63}$`);
-  var isValidHostLabel = (value, allowSubDomains = false) => {
-    if (!allowSubDomains) {
-      return VALID_HOST_LABEL_REGEX.test(value);
-    }
-    const labels = value.split(".");
-    for (const label of labels) {
-      if (!isValidHostLabel(label)) {
-        return false;
-      }
-    }
-    return true;
-  };
-  function ite(condition, trueValue, falseValue) {
-    return condition ? trueValue : falseValue;
-  }
   var not = (value) => !value;
-  var IP_V4_REGEX = new RegExp(`^(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)){3}$`);
-  var isIpAddress = (value) => IP_V4_REGEX.test(value) || value.startsWith("[") && value.endsWith("]");
   var DEFAULT_PORTS = {
     [types.EndpointURLScheme.HTTP]: 80,
     [types.EndpointURLScheme.HTTPS]: 443
@@ -6752,22 +6725,9 @@ var require_dist_cjs25 = __commonJS((exports2) => {
       isIp
     };
   };
-  function split(value, delimiter, limit) {
-    if (limit === 1) {
-      return [value];
-    }
-    if (value === "") {
-      return [""];
-    }
-    const parts = value.split(delimiter);
-    if (limit === 0) {
-      return parts;
-    }
-    return parts.slice(0, limit - 1).concat(parts.slice(1).join(delimiter));
-  }
   var stringEquals = (value1, value2) => value1 === value2;
   var substring = (input, start, stop, reverse) => {
-    if (input == null || start >= stop || input.length < stop || /[^\u0000-\u007f]/.test(input)) {
+    if (start >= stop || input.length < stop || /[^\u0000-\u007f]/.test(input)) {
       return null;
     }
     if (!reverse) {
@@ -6778,21 +6738,21 @@ var require_dist_cjs25 = __commonJS((exports2) => {
   var uriEncode = (value) => encodeURIComponent(value).replace(/[!*'()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
   var endpointFunctions = {
     booleanEquals,
-    coalesce,
     getAttr,
     isSet,
     isValidHostLabel,
-    ite,
     not,
     parseURL,
-    split,
     stringEquals,
     substring,
     uriEncode
   };
   var evaluateTemplate = (template, options) => {
     const evaluatedTemplateArr = [];
-    const { referenceRecord, endpointParams } = options;
+    const templateContext = {
+      ...options.endpointParams,
+      ...options.referenceRecord
+    };
     let currentIndex = 0;
     while (currentIndex < template.length) {
       const openingBraceIndex = template.indexOf("{", currentIndex);
@@ -6813,16 +6773,20 @@ var require_dist_cjs25 = __commonJS((exports2) => {
       const parameterName = template.substring(openingBraceIndex + 1, closingBraceIndex);
       if (parameterName.includes("#")) {
         const [refName, attrName] = parameterName.split("#");
-        evaluatedTemplateArr.push(getAttr(referenceRecord[refName] ?? endpointParams[refName], attrName));
+        evaluatedTemplateArr.push(getAttr(templateContext[refName], attrName));
       } else {
-        evaluatedTemplateArr.push(referenceRecord[parameterName] ?? endpointParams[parameterName]);
+        evaluatedTemplateArr.push(templateContext[parameterName]);
       }
       currentIndex = closingBraceIndex + 1;
     }
     return evaluatedTemplateArr.join("");
   };
   var getReferenceValue = ({ ref }, options) => {
-    return options.referenceRecord[ref] ?? options.endpointParams[ref];
+    const referenceRecord = {
+      ...options.endpointParams,
+      ...options.referenceRecord
+    };
+    return referenceRecord[ref];
   };
   var evaluateExpression = (obj, keyName, options) => {
     if (typeof obj === "string") {
@@ -6835,26 +6799,12 @@ var require_dist_cjs25 = __commonJS((exports2) => {
     throw new EndpointError(`'${keyName}': ${String(obj)} is not a string, function or reference.`);
   };
   var callFunction = ({ fn, argv }, options) => {
-    const evaluatedArgs = Array(argv.length);
-    for (let i = 0;i < evaluatedArgs.length; ++i) {
-      const arg = argv[i];
-      if (typeof arg === "boolean" || typeof arg === "number") {
-        evaluatedArgs[i] = arg;
-      } else {
-        evaluatedArgs[i] = group$2.evaluateExpression(arg, "arg", options);
-      }
+    const evaluatedArgs = argv.map((arg) => ["boolean", "number"].includes(typeof arg) ? arg : group$2.evaluateExpression(arg, "arg", options));
+    const fnSegments = fn.split(".");
+    if (fnSegments[0] in customEndpointFunctions && fnSegments[1] != null) {
+      return customEndpointFunctions[fnSegments[0]][fnSegments[1]](...evaluatedArgs);
     }
-    if (fn.includes(".")) {
-      const fnSegments = fn.split(".");
-      if (fnSegments[0] in customEndpointFunctions && fnSegments[1] != null) {
-        return customEndpointFunctions[fnSegments[0]][fnSegments[1]](...evaluatedArgs);
-      }
-    }
-    if (typeof endpointFunctions[fn] !== "function") {
-      throw new Error(`function ${fn} not loaded in endpointFunctions.`);
-    }
-    const callable = endpointFunctions[fn];
-    return callable(...evaluatedArgs);
+    return endpointFunctions[fn](...evaluatedArgs);
   };
   var group$2 = {
     evaluateExpression,
@@ -6870,6 +6820,26 @@ var require_dist_cjs25 = __commonJS((exports2) => {
       result: value === "" ? true : !!value,
       ...assign != null && { toAssign: { name: assign, value } }
     };
+  };
+  var evaluateConditions = (conditions = [], options) => {
+    const conditionsReferenceRecord = {};
+    for (const condition of conditions) {
+      const { result, toAssign } = evaluateCondition(condition, {
+        ...options,
+        referenceRecord: {
+          ...options.referenceRecord,
+          ...conditionsReferenceRecord
+        }
+      });
+      if (!result) {
+        return { result };
+      }
+      if (toAssign) {
+        conditionsReferenceRecord[toAssign.name] = toAssign.value;
+        options.logger?.debug?.(`${debugId} assign: ${toAssign.name} := ${toDebugString(toAssign.value)}`);
+      }
+    }
+    return { result: true, referenceRecord: conditionsReferenceRecord };
   };
   var getEndpointHeaders = (headers, options) => Object.entries(headers).reduce((acc, [headerKey, headerVal]) => ({
     ...acc,
@@ -6918,62 +6888,6 @@ var require_dist_cjs25 = __commonJS((exports2) => {
       }
     }
     throw new EndpointError(`Endpoint URL must be a string, got ${typeof expression}`);
-  };
-  var RESULT = 1e8;
-  var decideEndpoint = (bdd, options) => {
-    const { nodes, root, results, conditions } = bdd;
-    let ref = root;
-    const referenceRecord = {};
-    const closure = {
-      referenceRecord,
-      endpointParams: options.endpointParams,
-      logger: options.logger
-    };
-    while (ref !== 1 && ref !== -1 && ref < RESULT) {
-      const node_i = 3 * (Math.abs(ref) - 1);
-      const [condition_i, highRef, lowRef] = [nodes[node_i], nodes[node_i + 1], nodes[node_i + 2]];
-      const [fn, argv, assign] = conditions[condition_i];
-      const evaluation = evaluateCondition({ fn, assign, argv }, closure);
-      if (evaluation.toAssign) {
-        const { name, value } = evaluation.toAssign;
-        referenceRecord[name] = value;
-      }
-      ref = ref >= 0 === evaluation.result ? highRef : lowRef;
-    }
-    if (ref >= RESULT) {
-      const result = results[ref - RESULT];
-      if (result[0] === -1) {
-        const [, errorMessage] = result;
-        throw new EndpointError(errorMessage);
-      }
-      const [url, properties, headers] = result;
-      return {
-        url: getEndpointUrl(url, closure),
-        properties: getEndpointProperties(properties, closure),
-        headers: getEndpointHeaders(headers, closure)
-      };
-    }
-    throw new EndpointError(`No matching endpoint.`);
-  };
-  var evaluateConditions = (conditions = [], options) => {
-    const conditionsReferenceRecord = {};
-    for (const condition of conditions) {
-      const { result, toAssign } = evaluateCondition(condition, {
-        ...options,
-        referenceRecord: {
-          ...options.referenceRecord,
-          ...conditionsReferenceRecord
-        }
-      });
-      if (!result) {
-        return { result };
-      }
-      if (toAssign) {
-        conditionsReferenceRecord[toAssign.name] = toAssign.value;
-        options.logger?.debug?.(`${debugId} assign: ${toAssign.name} := ${toDebugString(toAssign.value)}`);
-      }
-    }
-    return { result: true, referenceRecord: conditionsReferenceRecord };
   };
   var evaluateEndpointRule = (endpointRule, options) => {
     const { conditions, endpoint } = endpointRule;
@@ -7063,11 +6977,9 @@ var require_dist_cjs25 = __commonJS((exports2) => {
     options.logger?.debug?.(`${debugId} Resolved endpoint: ${toDebugString(endpoint)}`);
     return endpoint;
   };
-  exports2.BinaryDecisionDiagram = BinaryDecisionDiagram;
   exports2.EndpointCache = EndpointCache;
   exports2.EndpointError = EndpointError;
   exports2.customEndpointFunctions = customEndpointFunctions;
-  exports2.decideEndpoint = decideEndpoint;
   exports2.isIpAddress = isIpAddress;
   exports2.isValidHostLabel = isValidHostLabel;
   exports2.resolveEndpoint = resolveEndpoint;
@@ -12233,7 +12145,7 @@ var require_package = __commonJS((exports2, module2) => {
   module2.exports = {
     name: "@aws-sdk/client-ssm",
     description: "AWS SDK for JavaScript Ssm Client for Node.js, Browser and React Native",
-    version: "3.1030.0",
+    version: "3.1029.0",
     scripts: {
       build: "concurrently 'yarn:build:types' 'yarn:build:es' && yarn build:cjs",
       "build:cjs": "node ../../scripts/compilation/inline client-ssm",
@@ -34230,7 +34142,7 @@ var require_runtimeConfig5 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = getRuntimeConfig;
 });
 
-// node_modules/@aws-sdk/client-ssm/node_modules/@smithy/protocol-http/dist-cjs/index.js
+// node_modules/@smithy/protocol-http/dist-cjs/index.js
 var require_dist_cjs68 = __commonJS((exports2) => {
   var types = require_dist_cjs();
   var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
@@ -38117,12 +38029,12 @@ var require_dist_cjs72 = __commonJS((exports2) => {
   tslib_1.__exportStar(require_fromWebToken2(), exports2);
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/abort.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/abort.js
 var require_abort = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/auth.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/auth.js
 var require_auth = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.HttpAuthLocation = undefined;
@@ -38133,42 +38045,42 @@ var require_auth = __commonJS((exports2) => {
   })(HttpAuthLocation = exports2.HttpAuthLocation || (exports2.HttpAuthLocation = {}));
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/blob/blob-payload-input-types.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/blob/blob-payload-input-types.js
 var require_blob_payload_input_types = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/checksum.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/checksum.js
 var require_checksum = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/client.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/client.js
 var require_client2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/command.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/command.js
 var require_command = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/connection/config.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/connection/config.js
 var require_config = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/connection/manager.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/connection/manager.js
 var require_manager = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/connection/pool.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/connection/pool.js
 var require_pool = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/connection/index.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/connection/index.js
 var require_connection = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   var tslib_1 = require_tslib();
@@ -38177,17 +38089,17 @@ var require_connection = __commonJS((exports2) => {
   tslib_1.__exportStar(require_pool(), exports2);
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/crypto.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/crypto.js
 var require_crypto = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/encode.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/encode.js
 var require_encode = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/endpoint.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/endpoint.js
 var require_endpoint = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.EndpointURLScheme = undefined;
@@ -38198,32 +38110,32 @@ var require_endpoint = __commonJS((exports2) => {
   })(EndpointURLScheme = exports2.EndpointURLScheme || (exports2.EndpointURLScheme = {}));
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/EndpointRuleObject.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/EndpointRuleObject.js
 var require_EndpointRuleObject = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/ErrorRuleObject.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/ErrorRuleObject.js
 var require_ErrorRuleObject = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/RuleSetObject.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/RuleSetObject.js
 var require_RuleSetObject = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/shared.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/shared.js
 var require_shared = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/TreeRuleObject.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/TreeRuleObject.js
 var require_TreeRuleObject = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/index.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/endpoints/index.js
 var require_endpoints2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   var tslib_1 = require_tslib();
@@ -38234,12 +38146,12 @@ var require_endpoints2 = __commonJS((exports2) => {
   tslib_1.__exportStar(require_TreeRuleObject(), exports2);
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/eventStream.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/eventStream.js
 var require_eventStream = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/http.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/http.js
 var require_http = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.FieldPosition = undefined;
@@ -38250,17 +38162,17 @@ var require_http = __commonJS((exports2) => {
   })(FieldPosition = exports2.FieldPosition || (exports2.FieldPosition = {}));
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/identity/awsCredentialIdentity.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/identity/awsCredentialIdentity.js
 var require_awsCredentialIdentity = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/identity/identity.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/identity/identity.js
 var require_identity = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/identity/index.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/identity/index.js
 var require_identity2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   var tslib_1 = require_tslib();
@@ -38268,72 +38180,72 @@ var require_identity2 = __commonJS((exports2) => {
   tslib_1.__exportStar(require_identity(), exports2);
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/logger.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/logger.js
 var require_logger = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/middleware.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/middleware.js
 var require_middleware = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/pagination.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/pagination.js
 var require_pagination = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/profile.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/profile.js
 var require_profile = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/response.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/response.js
 var require_response = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/retry.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/retry.js
 var require_retry = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/serde.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/serde.js
 var require_serde2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/shapes.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/shapes.js
 var require_shapes = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/signature.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/signature.js
 var require_signature = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/stream.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/stream.js
 var require_stream = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/streaming-payload/streaming-blob-common-types.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/streaming-payload/streaming-blob-common-types.js
 var require_streaming_blob_common_types = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/streaming-payload/streaming-blob-payload-input-types.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/streaming-payload/streaming-blob-payload-input-types.js
 var require_streaming_blob_payload_input_types = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/streaming-payload/streaming-blob-payload-output-types.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/streaming-payload/streaming-blob-payload-output-types.js
 var require_streaming_blob_payload_output_types = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/transfer.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/transfer.js
 var require_transfer = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.RequestHandlerProtocol = undefined;
@@ -38345,32 +38257,32 @@ var require_transfer = __commonJS((exports2) => {
   })(RequestHandlerProtocol = exports2.RequestHandlerProtocol || (exports2.RequestHandlerProtocol = {}));
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/transform/client-payload-blob-type-narrow.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/transform/client-payload-blob-type-narrow.js
 var require_client_payload_blob_type_narrow = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/transform/type-transform.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/transform/type-transform.js
 var require_type_transform = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/uri.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/uri.js
 var require_uri = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/util.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/util.js
 var require_util = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/waiter.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/waiter.js
 var require_waiter = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
 });
 
-// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/types/dist-cjs/index.js
+// node_modules/@aws-sdk/protocol-http/node_modules/@smithy/protocol-http/node_modules/@smithy/types/dist-cjs/index.js
 var require_dist_cjs73 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   var tslib_1 = require_tslib();
@@ -38585,7 +38497,7 @@ var require_node_native_fetch_handler = __commonJS((exports2) => {
   var node_url_1 = require("node:url");
   var __HttpResponse;
   try {
-    __HttpResponse = (()=>{throw new Error("Cannot require module "+"@smithy/protocol-http");})().HttpResponse;
+    __HttpResponse = require_dist_cjs68().HttpResponse;
   } catch {
     __HttpResponse = require_dist_cjs75().HttpResponse;
   }
@@ -38859,7 +38771,7 @@ var require_package3 = __commonJS((exports2, module2) => {
   module2.exports = {
     name: "@aws-sdk/client-bedrock",
     description: "AWS SDK for JavaScript Bedrock Client for Node.js, Browser and React Native",
-    version: "3.1030.0",
+    version: "3.1029.0",
     scripts: {
       build: "concurrently 'yarn:build:types' 'yarn:build:es' && yarn build:cjs",
       "build:cjs": "node ../../scripts/compilation/inline client-bedrock",
@@ -38886,7 +38798,7 @@ var require_package3 = __commonJS((exports2, module2) => {
       "@aws-sdk/middleware-recursion-detection": "^3.972.10",
       "@aws-sdk/middleware-user-agent": "^3.972.29",
       "@aws-sdk/region-config-resolver": "^3.972.11",
-      "@aws-sdk/token-providers": "3.1030.0",
+      "@aws-sdk/token-providers": "3.1029.0",
       "@aws-sdk/types": "^3.973.7",
       "@aws-sdk/util-endpoints": "^3.996.6",
       "@aws-sdk/util-user-agent-browser": "^3.972.9",
@@ -46498,167 +46410,8 @@ var require_runtimeConfig7 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = getRuntimeConfig;
 });
 
-// node_modules/@aws-sdk/client-bedrock/node_modules/@smithy/protocol-http/dist-cjs/index.js
-var require_dist_cjs77 = __commonJS((exports2) => {
-  var types = require_dist_cjs();
-  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
-    return {
-      setHttpHandler(handler) {
-        runtimeConfig.httpHandler = handler;
-      },
-      httpHandler() {
-        return runtimeConfig.httpHandler;
-      },
-      updateHttpClientConfig(key, value) {
-        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
-      },
-      httpHandlerConfigs() {
-        return runtimeConfig.httpHandler.httpHandlerConfigs();
-      }
-    };
-  };
-  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
-    return {
-      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
-    };
-  };
-
-  class Field {
-    name;
-    kind;
-    values;
-    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
-      this.name = name;
-      this.kind = kind;
-      this.values = values;
-    }
-    add(value) {
-      this.values.push(value);
-    }
-    set(values) {
-      this.values = values;
-    }
-    remove(value) {
-      this.values = this.values.filter((v) => v !== value);
-    }
-    toString() {
-      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
-    }
-    get() {
-      return this.values;
-    }
-  }
-
-  class Fields {
-    entries = {};
-    encoding;
-    constructor({ fields = [], encoding = "utf-8" }) {
-      fields.forEach(this.setField.bind(this));
-      this.encoding = encoding;
-    }
-    setField(field) {
-      this.entries[field.name.toLowerCase()] = field;
-    }
-    getField(name) {
-      return this.entries[name.toLowerCase()];
-    }
-    removeField(name) {
-      delete this.entries[name.toLowerCase()];
-    }
-    getByType(kind) {
-      return Object.values(this.entries).filter((field) => field.kind === kind);
-    }
-  }
-
-  class HttpRequest {
-    method;
-    protocol;
-    hostname;
-    port;
-    path;
-    query;
-    headers;
-    username;
-    password;
-    fragment;
-    body;
-    constructor(options) {
-      this.method = options.method || "GET";
-      this.hostname = options.hostname || "localhost";
-      this.port = options.port;
-      this.query = options.query || {};
-      this.headers = options.headers || {};
-      this.body = options.body;
-      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
-      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
-      this.username = options.username;
-      this.password = options.password;
-      this.fragment = options.fragment;
-    }
-    static clone(request) {
-      const cloned = new HttpRequest({
-        ...request,
-        headers: { ...request.headers }
-      });
-      if (cloned.query) {
-        cloned.query = cloneQuery(cloned.query);
-      }
-      return cloned;
-    }
-    static isInstance(request) {
-      if (!request) {
-        return false;
-      }
-      const req = request;
-      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
-    }
-    clone() {
-      return HttpRequest.clone(this);
-    }
-  }
-  function cloneQuery(query) {
-    return Object.keys(query).reduce((carry, paramName) => {
-      const param = query[paramName];
-      return {
-        ...carry,
-        [paramName]: Array.isArray(param) ? [...param] : param
-      };
-    }, {});
-  }
-
-  class HttpResponse {
-    statusCode;
-    reason;
-    headers;
-    body;
-    constructor(options) {
-      this.statusCode = options.statusCode;
-      this.reason = options.reason;
-      this.headers = options.headers || {};
-      this.body = options.body;
-    }
-    static isInstance(response) {
-      if (!response)
-        return false;
-      const resp = response;
-      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
-    }
-  }
-  function isValidHostname(hostname) {
-    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
-    return hostPattern.test(hostname);
-  }
-  exports2.Field = Field;
-  exports2.Fields = Fields;
-  exports2.HttpRequest = HttpRequest;
-  exports2.HttpResponse = HttpResponse;
-  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
-  exports2.isValidHostname = isValidHostname;
-  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
-});
-
 // node_modules/@aws-sdk/client-bedrock/dist-cjs/index.js
-var require_dist_cjs78 = __commonJS((exports2) => {
+var require_dist_cjs77 = __commonJS((exports2) => {
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
   var middlewareRecursionDetection = require_dist_cjs6();
@@ -46673,7 +46426,7 @@ var require_dist_cjs78 = __commonJS((exports2) => {
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider7();
   var runtimeConfig = require_runtimeConfig7();
   var regionConfigResolver = require_dist_cjs58();
-  var protocolHttp = require_dist_cjs77();
+  var protocolHttp = require_dist_cjs68();
   var schemas_0 = require_schemas_07();
   var errors = require_errors7();
   var BedrockServiceException = require_BedrockServiceException();
@@ -48029,7 +47782,7 @@ var require_dist_cjs78 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/middleware-eventstream/node_modules/@smithy/protocol-http/dist-cjs/index.js
-var require_dist_cjs79 = __commonJS((exports2) => {
+var require_dist_cjs78 = __commonJS((exports2) => {
   var types = require_dist_cjs();
   var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
     return {
@@ -48188,8 +47941,8 @@ var require_dist_cjs79 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/middleware-eventstream/dist-cjs/index.js
-var require_dist_cjs80 = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs79();
+var require_dist_cjs79 = __commonJS((exports2) => {
+  var protocolHttp = require_dist_cjs78();
   function resolveEventStreamConfig(input) {
     const eventSigner = input.signer;
     const messageSigner = input.signer;
@@ -48250,7 +48003,7 @@ var require_dist_cjs80 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/util-format-url/dist-cjs/index.js
-var require_dist_cjs81 = __commonJS((exports2) => {
+var require_dist_cjs80 = __commonJS((exports2) => {
   var querystringBuilder = require_dist_cjs15();
   function formatUrl(request) {
     const { port, query } = request;
@@ -48283,8 +48036,8 @@ var require_dist_cjs81 = __commonJS((exports2) => {
   exports2.formatUrl = formatUrl;
 });
 
-// node_modules/@aws-crypto/util/node_modules/@smithy/is-array-buffer/dist-cjs/index.js
-var require_dist_cjs82 = __commonJS((exports2, module2) => {
+// node_modules/@aws-crypto/util/node_modules/@smithy/util-utf8/node_modules/@smithy/util-buffer-from/node_modules/@smithy/is-array-buffer/dist-cjs/index.js
+var require_dist_cjs81 = __commonJS((exports2, module2) => {
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -48311,8 +48064,8 @@ var require_dist_cjs82 = __commonJS((exports2, module2) => {
   var isArrayBuffer = /* @__PURE__ */ __name((arg) => typeof ArrayBuffer === "function" && arg instanceof ArrayBuffer || Object.prototype.toString.call(arg) === "[object ArrayBuffer]", "isArrayBuffer");
 });
 
-// node_modules/@aws-crypto/util/node_modules/@smithy/util-buffer-from/dist-cjs/index.js
-var require_dist_cjs83 = __commonJS((exports2, module2) => {
+// node_modules/@aws-crypto/util/node_modules/@smithy/util-utf8/node_modules/@smithy/util-buffer-from/dist-cjs/index.js
+var require_dist_cjs82 = __commonJS((exports2, module2) => {
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -48337,7 +48090,7 @@ var require_dist_cjs83 = __commonJS((exports2, module2) => {
     fromString: () => fromString
   });
   module2.exports = __toCommonJS2(src_exports);
-  var import_is_array_buffer = require_dist_cjs82();
+  var import_is_array_buffer = require_dist_cjs81();
   var import_buffer = require("buffer");
   var fromArrayBuffer = /* @__PURE__ */ __name((input, offset = 0, length = input.byteLength - offset) => {
     if (!(0, import_is_array_buffer.isArrayBuffer)(input)) {
@@ -48354,7 +48107,7 @@ var require_dist_cjs83 = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-crypto/util/node_modules/@smithy/util-utf8/dist-cjs/index.js
-var require_dist_cjs84 = __commonJS((exports2, module2) => {
+var require_dist_cjs83 = __commonJS((exports2, module2) => {
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -48380,7 +48133,7 @@ var require_dist_cjs84 = __commonJS((exports2, module2) => {
     toUtf8: () => toUtf8
   });
   module2.exports = __toCommonJS2(src_exports);
-  var import_util_buffer_from = require_dist_cjs83();
+  var import_util_buffer_from = require_dist_cjs82();
   var fromUtf8 = /* @__PURE__ */ __name((input) => {
     const buf = (0, import_util_buffer_from.fromString)(input, "utf8");
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength / Uint8Array.BYTES_PER_ELEMENT);
@@ -48409,7 +48162,7 @@ var require_dist_cjs84 = __commonJS((exports2, module2) => {
 var require_convertToBuffer = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.convertToBuffer = undefined;
-  var util_utf8_1 = require_dist_cjs84();
+  var util_utf8_1 = require_dist_cjs83();
   var fromUtf8 = typeof Buffer !== "undefined" && Buffer.from ? function(input) {
     return Buffer.from(input, "utf8");
   } : util_utf8_1.fromUtf8;
@@ -48833,7 +48586,7 @@ var require_main2 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-codec/dist-cjs/index.js
-var require_dist_cjs85 = __commonJS((exports2) => {
+var require_dist_cjs84 = __commonJS((exports2) => {
   var crc32 = require_main2();
   var utilHexEncoding = require_dist_cjs19();
 
@@ -49234,8 +48987,8 @@ var require_dist_cjs85 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-universal/dist-cjs/index.js
-var require_dist_cjs86 = __commonJS((exports2) => {
-  var eventstreamCodec = require_dist_cjs85();
+var require_dist_cjs85 = __commonJS((exports2) => {
+  var eventstreamCodec = require_dist_cjs84();
   function getChunkedStream(source) {
     let currentMessageTotalLength = 0;
     let currentMessagePendingLength = 0;
@@ -49359,8 +49112,8 @@ var require_dist_cjs86 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-browser/dist-cjs/index.js
-var require_dist_cjs87 = __commonJS((exports2) => {
-  var eventstreamSerdeUniversal = require_dist_cjs86();
+var require_dist_cjs86 = __commonJS((exports2) => {
+  var eventstreamSerdeUniversal = require_dist_cjs85();
   var readableStreamtoIterable = (readableStream) => ({
     [Symbol.asyncIterator]: async function* () {
       const reader = readableStream.getReader();
@@ -49415,7 +49168,7 @@ var require_dist_cjs87 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/middleware-websocket/node_modules/@smithy/protocol-http/dist-cjs/index.js
-var require_dist_cjs88 = __commonJS((exports2) => {
+var require_dist_cjs87 = __commonJS((exports2) => {
   var types = require_dist_cjs();
   var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
     return {
@@ -49574,13 +49327,13 @@ var require_dist_cjs88 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/middleware-websocket/dist-cjs/index.js
-var require_dist_cjs89 = __commonJS((exports2) => {
-  var utilFormatUrl = require_dist_cjs81();
-  var eventstreamSerdeBrowser = require_dist_cjs87();
+var require_dist_cjs88 = __commonJS((exports2) => {
+  var utilFormatUrl = require_dist_cjs80();
+  var eventstreamSerdeBrowser = require_dist_cjs86();
   var fetchHttpHandler = require_dist_cjs18();
-  var protocolHttp = require_dist_cjs88();
+  var protocolHttp = require_dist_cjs87();
   var utilBase64 = require_dist_cjs12();
-  var eventstreamCodec = require_dist_cjs85();
+  var eventstreamCodec = require_dist_cjs84();
   var utilHexEncoding = require_dist_cjs19();
   var isWebSocketRequest = (request) => request.protocol === "ws:" || request.protocol === "wss:";
   var DEFAULT_WS_CONNECTION_TIMEOUT_MS = 3000;
@@ -49953,7 +49706,7 @@ var require_dist_cjs89 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-config-resolver/dist-cjs/index.js
-var require_dist_cjs90 = __commonJS((exports2) => {
+var require_dist_cjs89 = __commonJS((exports2) => {
   var resolveEventStreamSerdeConfig = (input) => Object.assign(input, {
     eventStreamMarshaller: input.eventStreamSerdeProvider(input)
   });
@@ -50031,7 +49784,7 @@ var require_package4 = __commonJS((exports2, module2) => {
   module2.exports = {
     name: "@aws-sdk/client-bedrock-runtime",
     description: "AWS SDK for JavaScript Bedrock Runtime Client for Node.js, Browser and React Native",
-    version: "3.1030.0",
+    version: "3.1029.0",
     scripts: {
       build: "concurrently 'yarn:build:types' 'yarn:build:es' && yarn build:cjs",
       "build:cjs": "node ../../scripts/compilation/inline client-bedrock-runtime",
@@ -50069,7 +49822,7 @@ var require_package4 = __commonJS((exports2, module2) => {
       "@aws-sdk/middleware-user-agent": "^3.972.29",
       "@aws-sdk/middleware-websocket": "^3.972.15",
       "@aws-sdk/region-config-resolver": "^3.972.11",
-      "@aws-sdk/token-providers": "3.1030.0",
+      "@aws-sdk/token-providers": "3.1029.0",
       "@aws-sdk/types": "^3.973.7",
       "@aws-sdk/util-endpoints": "^3.996.6",
       "@aws-sdk/util-user-agent-browser": "^3.972.9",
@@ -50149,8 +49902,8 @@ var require_package4 = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-sdk/eventstream-handler-node/dist-cjs/index.js
-var require_dist_cjs91 = __commonJS((exports2) => {
-  var eventstreamCodec = require_dist_cjs85();
+var require_dist_cjs90 = __commonJS((exports2) => {
+  var eventstreamCodec = require_dist_cjs84();
   var node_stream = require("node:stream");
 
   class EventSigningTransformStream extends node_stream.Transform {
@@ -50264,8 +50017,8 @@ var require_dist_cjs91 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-node/dist-cjs/index.js
-var require_dist_cjs92 = __commonJS((exports2) => {
-  var eventstreamSerdeUniversal = require_dist_cjs86();
+var require_dist_cjs91 = __commonJS((exports2) => {
+  var eventstreamSerdeUniversal = require_dist_cjs85();
   var stream = require("stream");
   async function* readabletoIterable(readStream) {
     let streamEnded = false;
@@ -52937,12 +52690,12 @@ var require_runtimeConfig8 = __commonJS((exports2) => {
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var credential_provider_node_1 = require_dist_cjs67();
-  var eventstream_handler_node_1 = require_dist_cjs91();
+  var eventstream_handler_node_1 = require_dist_cjs90();
   var token_providers_1 = require_dist_cjs76();
   var util_user_agent_node_1 = require_dist_cjs52();
   var config_resolver_1 = require_dist_cjs32();
   var core_1 = require_dist_cjs24();
-  var eventstream_serde_node_1 = require_dist_cjs92();
+  var eventstream_serde_node_1 = require_dist_cjs91();
   var hash_node_1 = require_dist_cjs53();
   var middleware_retry_1 = require_dist_cjs44();
   var node_config_provider_1 = require_dist_cjs37();
@@ -53012,177 +52765,18 @@ var require_runtimeConfig8 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = getRuntimeConfig;
 });
 
-// node_modules/@aws-sdk/client-bedrock-runtime/node_modules/@smithy/protocol-http/dist-cjs/index.js
-var require_dist_cjs93 = __commonJS((exports2) => {
-  var types = require_dist_cjs();
-  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
-    return {
-      setHttpHandler(handler) {
-        runtimeConfig.httpHandler = handler;
-      },
-      httpHandler() {
-        return runtimeConfig.httpHandler;
-      },
-      updateHttpClientConfig(key, value) {
-        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
-      },
-      httpHandlerConfigs() {
-        return runtimeConfig.httpHandler.httpHandlerConfigs();
-      }
-    };
-  };
-  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
-    return {
-      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
-    };
-  };
-
-  class Field {
-    name;
-    kind;
-    values;
-    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
-      this.name = name;
-      this.kind = kind;
-      this.values = values;
-    }
-    add(value) {
-      this.values.push(value);
-    }
-    set(values) {
-      this.values = values;
-    }
-    remove(value) {
-      this.values = this.values.filter((v) => v !== value);
-    }
-    toString() {
-      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
-    }
-    get() {
-      return this.values;
-    }
-  }
-
-  class Fields {
-    entries = {};
-    encoding;
-    constructor({ fields = [], encoding = "utf-8" }) {
-      fields.forEach(this.setField.bind(this));
-      this.encoding = encoding;
-    }
-    setField(field) {
-      this.entries[field.name.toLowerCase()] = field;
-    }
-    getField(name) {
-      return this.entries[name.toLowerCase()];
-    }
-    removeField(name) {
-      delete this.entries[name.toLowerCase()];
-    }
-    getByType(kind) {
-      return Object.values(this.entries).filter((field) => field.kind === kind);
-    }
-  }
-
-  class HttpRequest {
-    method;
-    protocol;
-    hostname;
-    port;
-    path;
-    query;
-    headers;
-    username;
-    password;
-    fragment;
-    body;
-    constructor(options) {
-      this.method = options.method || "GET";
-      this.hostname = options.hostname || "localhost";
-      this.port = options.port;
-      this.query = options.query || {};
-      this.headers = options.headers || {};
-      this.body = options.body;
-      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
-      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
-      this.username = options.username;
-      this.password = options.password;
-      this.fragment = options.fragment;
-    }
-    static clone(request) {
-      const cloned = new HttpRequest({
-        ...request,
-        headers: { ...request.headers }
-      });
-      if (cloned.query) {
-        cloned.query = cloneQuery(cloned.query);
-      }
-      return cloned;
-    }
-    static isInstance(request) {
-      if (!request) {
-        return false;
-      }
-      const req = request;
-      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
-    }
-    clone() {
-      return HttpRequest.clone(this);
-    }
-  }
-  function cloneQuery(query) {
-    return Object.keys(query).reduce((carry, paramName) => {
-      const param = query[paramName];
-      return {
-        ...carry,
-        [paramName]: Array.isArray(param) ? [...param] : param
-      };
-    }, {});
-  }
-
-  class HttpResponse {
-    statusCode;
-    reason;
-    headers;
-    body;
-    constructor(options) {
-      this.statusCode = options.statusCode;
-      this.reason = options.reason;
-      this.headers = options.headers || {};
-      this.body = options.body;
-    }
-    static isInstance(response) {
-      if (!response)
-        return false;
-      const resp = response;
-      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
-    }
-  }
-  function isValidHostname(hostname) {
-    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
-    return hostPattern.test(hostname);
-  }
-  exports2.Field = Field;
-  exports2.Fields = Fields;
-  exports2.HttpRequest = HttpRequest;
-  exports2.HttpResponse = HttpResponse;
-  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
-  exports2.isValidHostname = isValidHostname;
-  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
-});
-
 // node_modules/@aws-sdk/client-bedrock-runtime/dist-cjs/index.js
-var require_dist_cjs94 = __commonJS((exports2) => {
-  var middlewareEventstream = require_dist_cjs80();
+var require_dist_cjs92 = __commonJS((exports2) => {
+  var middlewareEventstream = require_dist_cjs79();
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
   var middlewareRecursionDetection = require_dist_cjs6();
   var middlewareUserAgent = require_dist_cjs30();
-  var middlewareWebsocket = require_dist_cjs89();
+  var middlewareWebsocket = require_dist_cjs88();
   var configResolver = require_dist_cjs32();
   var core = require_dist_cjs24();
   var schema = require_schema();
-  var eventstreamSerdeConfigResolver = require_dist_cjs90();
+  var eventstreamSerdeConfigResolver = require_dist_cjs89();
   var middlewareContentLength = require_dist_cjs34();
   var middlewareEndpoint = require_dist_cjs40();
   var middlewareRetry = require_dist_cjs44();
@@ -53190,7 +52784,7 @@ var require_dist_cjs94 = __commonJS((exports2) => {
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider8();
   var runtimeConfig = require_runtimeConfig8();
   var regionConfigResolver = require_dist_cjs58();
-  var protocolHttp = require_dist_cjs93();
+  var protocolHttp = require_dist_cjs68();
   var schemas_0 = require_schemas_08();
   var errors = require_errors8();
   var BedrockRuntimeServiceException = require_BedrockRuntimeServiceException();
@@ -53700,6 +53294,801 @@ var require_dist_cjs94 = __commonJS((exports2) => {
   });
 });
 
+// node_modules/@microsoft/tiktokenizer/dist/bytePairEncode.js
+var require_bytePairEncode = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.bytePairEncode = exports2.BinaryMap = exports2.binaryMapKey = undefined;
+  var binaryMapKey = (k, start, end) => {
+    const length = end - start;
+    const lowerMask = 16777215 >>> Math.max(0, (3 - length) * 8);
+    const lower = (k[start + 0] | k[start + 1] << 8 | k[start + 2] << 16) & lowerMask;
+    const upperMask = 16777215 >>> Math.min(31, Math.max(0, (6 - length) * 8));
+    const upper = (k[start + 3] | k[start + 4] << 8 | k[start + 5] << 16) & upperMask;
+    return lower + 16777216 * upper;
+  };
+  exports2.binaryMapKey = binaryMapKey;
+
+  class BinaryMap {
+    constructor() {
+      this.nested = new Map;
+      this.final = new Map;
+    }
+    get(key, start = 0, end = key.length) {
+      const isFinal = end < 6 + start;
+      const mapKey = (0, exports2.binaryMapKey)(key, start, end);
+      if (isFinal) {
+        return this.final.get(mapKey);
+      }
+      return this.nested.get(mapKey)?.get(key, 6 + start, end);
+    }
+    set(key, value) {
+      const k = (0, exports2.binaryMapKey)(key, 0, key.length);
+      const isFinal = key.length < 6;
+      if (isFinal) {
+        this.final.set(k, value);
+        return;
+      }
+      const existing = this.nested.get(k);
+      if (existing instanceof BinaryMap) {
+        existing.set(key.subarray(6), value);
+      } else {
+        const newMap = new BinaryMap;
+        newMap.set(key.subarray(6), value);
+        this.nested.set(k, newMap);
+      }
+    }
+  }
+  exports2.BinaryMap = BinaryMap;
+  var ranksBuf = new Int32Array(128);
+  var indicesBuf = new Int32Array(128);
+  function bytePairEncode(mergingBytes, ranks, length) {
+    if (length === 1) {
+      return [ranks.get(mergingBytes)];
+    }
+    let minRank = 2147483647;
+    let minIndex = -1;
+    while (ranksBuf.length < length * 2) {
+      indicesBuf = new Int32Array(indicesBuf.length * 2);
+      ranksBuf = new Int32Array(ranksBuf.length * 2);
+    }
+    for (let i = 0;i < length - 1; i++) {
+      const rank = ranks.get(mergingBytes, i, i + 2) ?? 2147483647;
+      if (rank < minRank) {
+        minRank = rank;
+        minIndex = i;
+      }
+      indicesBuf[i] = i;
+      ranksBuf[i] = rank;
+    }
+    indicesBuf[length - 1] = length - 1;
+    ranksBuf[length - 1] = 2147483647;
+    indicesBuf[length] = length;
+    ranksBuf[length] = 2147483647;
+    let maxIndex = length + 1;
+    function getRank(startIndex, skip = 0) {
+      if (startIndex + skip + 2 < maxIndex) {
+        const rank = ranks.get(mergingBytes, indicesBuf[startIndex], indicesBuf[startIndex + skip + 2]);
+        if (rank !== undefined) {
+          return rank;
+        }
+      }
+      return 2147483647;
+    }
+    while (minRank !== 2147483647) {
+      ranksBuf[indicesBuf[minIndex]] = getRank(minIndex, 1);
+      if (minIndex > 0) {
+        ranksBuf[indicesBuf[minIndex - 1]] = getRank(minIndex - 1, 1);
+      }
+      for (let i = minIndex + 1;i < maxIndex - 1; i++) {
+        indicesBuf[i] = indicesBuf[i + 1];
+      }
+      maxIndex--;
+      minIndex = -1;
+      minRank = 2147483647;
+      for (let i = 0;i < maxIndex - 1; i++) {
+        const rank = ranksBuf[indicesBuf[i]];
+        if (ranksBuf[indicesBuf[i]] < minRank) {
+          minRank = rank;
+          minIndex = i;
+        }
+      }
+    }
+    const outList = [];
+    for (let i = 0;i < maxIndex - 1; i++) {
+      outList.push(ranks.get(mergingBytes, indicesBuf[i], indicesBuf[i + 1]));
+    }
+    return outList;
+  }
+  exports2.bytePairEncode = bytePairEncode;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/textEncoder.js
+var require_textEncoder = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.makeTextEncoder = undefined;
+
+  class UniversalTextEncoder {
+    constructor() {
+      this.length = 0;
+      this.encoder = new TextEncoder;
+    }
+    encode(text) {
+      const arr = this.encoder.encode(text);
+      this.length = arr.length;
+      return arr;
+    }
+  }
+
+  class NodeTextEncoder {
+    constructor() {
+      this.buffer = Buffer.alloc(256);
+      this.length = 0;
+    }
+    encode(text) {
+      while (true) {
+        this.length = this.buffer.write(text, "utf8");
+        if (this.length < this.buffer.length - 4) {
+          return this.buffer;
+        }
+        this.buffer = Buffer.alloc(this.length * 2);
+        this.length = this.buffer.write(text);
+      }
+    }
+  }
+  var makeTextEncoder = () => typeof Buffer !== "undefined" ? new NodeTextEncoder : new UniversalTextEncoder;
+  exports2.makeTextEncoder = makeTextEncoder;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/lru.js
+var require_lru = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.LRUCache = undefined;
+
+  class LRUCache {
+    constructor(size) {
+      this.size = size;
+      this.nodes = new Map;
+    }
+    get(key) {
+      const node = this.nodes.get(key);
+      if (node) {
+        this.moveToHead(node);
+        return node.value;
+      }
+      return;
+    }
+    set(key, value) {
+      const node = this.nodes.get(key);
+      if (node) {
+        node.value = value;
+        this.moveToHead(node);
+      } else {
+        const newNode = new Node(key, value);
+        this.nodes.set(key, newNode);
+        this.addNode(newNode);
+        if (this.nodes.size > this.size) {
+          this.nodes.delete(this.tail.key);
+          this.removeNode(this.tail);
+        }
+      }
+    }
+    moveToHead(node) {
+      this.removeNode(node);
+      node.next = undefined;
+      node.prev = undefined;
+      this.addNode(node);
+    }
+    addNode(node) {
+      if (this.head) {
+        this.head.prev = node;
+        node.next = this.head;
+      }
+      if (!this.tail) {
+        this.tail = node;
+      }
+      this.head = node;
+    }
+    removeNode(node) {
+      if (node.prev) {
+        node.prev.next = node.next;
+      } else {
+        this.head = node.next;
+      }
+      if (node.next) {
+        node.next.prev = node.prev;
+      } else {
+        this.tail = node.prev;
+      }
+    }
+  }
+  exports2.LRUCache = LRUCache;
+
+  class Node {
+    constructor(key, value) {
+      this.key = key;
+      this.value = value;
+    }
+  }
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/tikTokenizer.js
+var require_tikTokenizer = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.TikTokenizer = undefined;
+  var bytePairEncode_1 = require_bytePairEncode();
+  var textEncoder_1 = require_textEncoder();
+  var lru_1 = require_lru();
+  function loadTikTokenBpe(tikTokenBpeFile) {
+    const bpeDict = new Map;
+    try {
+      const fs = require("fs");
+      const fileContent = fs.readFileSync(tikTokenBpeFile, "utf-8");
+      processBpeRanks(fileContent);
+      return bpeDict;
+    } catch (ex) {
+      throw new Error(`Failed to load from BPE encoder file stream: ${ex}`);
+    }
+    function processBpeRanks(fileContent) {
+      for (const line of fileContent.split(/[\r\n]+/)) {
+        if (line.trim() === "") {
+          continue;
+        }
+        const tokens = line.split(" ");
+        if (tokens.length !== 2) {
+          throw new Error("Invalid format in the BPE encoder file stream");
+        }
+        const tokenBytes = new Uint8Array(Buffer.from(tokens[0], "base64"));
+        const rank = parseInt(tokens[1]);
+        if (!isNaN(rank)) {
+          bpeDict.set(tokenBytes, rank);
+        } else {
+          throw new Error(`Can't parse ${tokens[1]} to integer`);
+        }
+      }
+    }
+  }
+  function escapeRegExp(regex) {
+    return regex.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  class TikTokenizer {
+    constructor(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize = 8192) {
+      this.textEncoder = (0, textEncoder_1.makeTextEncoder)();
+      this.textDecoder = new TextDecoder("utf-8");
+      this.cache = new lru_1.LRUCache(cacheSize);
+      const bpeDict = typeof tikTokenBpeFileOrDict === "string" ? loadTikTokenBpe(tikTokenBpeFileOrDict) : tikTokenBpeFileOrDict;
+      this.init(bpeDict, specialTokensEncoder, regexPattern);
+    }
+    init(bpeDict, specialTokensEncoder, regexPattern) {
+      this.encoder = new bytePairEncode_1.BinaryMap;
+      for (const [key, value] of bpeDict) {
+        this.encoder.set(key, value);
+      }
+      this.regex = new RegExp(regexPattern, "gu");
+      this.specialTokensRegex = new RegExp(Array.from(specialTokensEncoder.keys()).map((s) => escapeRegExp(s)).join("|"));
+      this.specialTokensEncoder = specialTokensEncoder;
+      this.decoder = new Map;
+      for (const [key, value] of bpeDict) {
+        this.decoder.set(value, key);
+      }
+      if (bpeDict.size !== this.decoder.size) {
+        throw new Error("Encoder and decoder sizes do not match");
+      }
+      this.specialTokensDecoder = new Map;
+      for (const [key, value] of specialTokensEncoder) {
+        this.specialTokensDecoder.set(value, key);
+      }
+    }
+    findNextSpecialToken(text, start, allowedSpecial) {
+      let startFind = start;
+      let nextSpecial = null;
+      if (allowedSpecial && this.specialTokensRegex) {
+        while (true) {
+          nextSpecial = text.slice(startFind).match(this.specialTokensRegex);
+          if (!nextSpecial) {
+            break;
+          }
+          if (allowedSpecial && allowedSpecial.includes(nextSpecial[0])) {
+            break;
+          }
+          startFind += nextSpecial.index + 1;
+        }
+      }
+      const end = nextSpecial ? startFind + nextSpecial.index : text.length;
+      return [nextSpecial, end];
+    }
+    encode(text, allowedSpecial) {
+      const tokenIds = [];
+      let start = 0;
+      while (true) {
+        let nextSpecial;
+        let end;
+        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
+        if (end > start) {
+          this.encodeByIndex(text, tokenIds, start, end);
+        }
+        if (nextSpecial) {
+          start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
+          if (start >= text.length) {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      return tokenIds;
+    }
+    encodeSpecialToken(tokenIds, nextSpecial) {
+      const token = this.specialTokensEncoder?.get(nextSpecial[0]);
+      tokenIds.push(token);
+      return nextSpecial.index + nextSpecial[0].length;
+    }
+    encodeByIndex(text, tokenIds, start, end) {
+      let match;
+      const substring = text.substring(start, end);
+      this.regex.lastIndex = 0;
+      while (match = this.regex.exec(substring)) {
+        const cached = this.cache.get(match[0]);
+        if (cached) {
+          for (const b of cached) {
+            tokenIds.push(b);
+          }
+        } else {
+          const bytes = this.textEncoder.encode(match[0]);
+          const token = this.encoder.get(bytes, 0, this.textEncoder.length);
+          if (token !== undefined) {
+            tokenIds.push(token);
+            this.cache.set(match[0], [token]);
+          } else {
+            const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
+            for (const b of encodedTokens) {
+              tokenIds.push(b);
+            }
+            this.cache.set(match[0], encodedTokens);
+          }
+        }
+      }
+    }
+    encodeTrimSuffixByIndex(text, tokenIds, start, end, maxTokenCount, tokenCount, encodeLength) {
+      let match;
+      const substring = text.substring(start, end);
+      this.regex.lastIndex = 0;
+      while (match = this.regex.exec(substring)) {
+        const piece = match[0];
+        const cachedTokens = this.cache.get(piece);
+        if (cachedTokens) {
+          if (tokenCount + cachedTokens.length <= maxTokenCount) {
+            tokenCount += cachedTokens.length;
+            encodeLength += piece.length;
+            tokenIds.push(...cachedTokens);
+          } else {
+            let remainingTokens = maxTokenCount - tokenCount;
+            tokenCount += remainingTokens;
+            encodeLength += piece.length;
+            tokenIds.push(...cachedTokens.slice(0, remainingTokens));
+            break;
+          }
+        } else {
+          const bytes = this.textEncoder.encode(piece);
+          const token = this.encoder.get(bytes, 0, bytes.length);
+          if (token !== undefined) {
+            this.cache.set(piece, [token]);
+            if (tokenCount + 1 <= maxTokenCount) {
+              tokenCount++;
+              encodeLength += piece.length;
+              tokenIds.push(token);
+            } else {
+              break;
+            }
+          } else {
+            const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
+            this.cache.set(piece, encodedTokens);
+            if (tokenCount + encodedTokens.length <= maxTokenCount) {
+              tokenCount += encodedTokens.length;
+              encodeLength += piece.length;
+              for (const b of encodedTokens) {
+                tokenIds.push(b);
+              }
+            } else {
+              let remainingTokens = maxTokenCount - tokenCount;
+              tokenCount += remainingTokens;
+              encodeLength += piece.length;
+              for (let i = 0;i < remainingTokens; i++) {
+                tokenIds.push(encodedTokens[i]);
+              }
+              break;
+            }
+          }
+        }
+        if (tokenCount >= maxTokenCount) {
+          break;
+        }
+      }
+      return { tokenCount, encodeLength };
+    }
+    encodeTrimSuffix(text, maxTokenCount, allowedSpecial) {
+      const tokenIds = [];
+      let start = 0;
+      let tokenCount = 0;
+      let encodeLength = 0;
+      while (true) {
+        let nextSpecial;
+        let end;
+        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
+        if (end > start) {
+          const { tokenCount: newTokenCount, encodeLength: newEncodeLength } = this.encodeTrimSuffixByIndex(text, tokenIds, start, end, maxTokenCount, tokenCount, encodeLength);
+          tokenCount = newTokenCount;
+          encodeLength = newEncodeLength;
+          if (tokenCount >= maxTokenCount) {
+            break;
+          }
+        }
+        if (nextSpecial !== null) {
+          tokenCount++;
+          if (tokenCount <= maxTokenCount) {
+            start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
+            encodeLength += nextSpecial[0].length;
+            if (start >= text.length) {
+              break;
+            }
+          }
+          if (tokenCount >= maxTokenCount) {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      const encodedText = encodeLength === text.length ? text : text.slice(0, encodeLength);
+      return { tokenIds, text: encodedText };
+    }
+    encodeTrimPrefix(text, maxTokenCount, allowedSpecial) {
+      const tokenIds = [];
+      let start = 0;
+      let tokenCount = 0;
+      let encodeLength = 0;
+      const tokenCountMap = new Map;
+      tokenCountMap.set(tokenCount, encodeLength);
+      while (true) {
+        let nextSpecial;
+        let end;
+        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
+        if (end > start) {
+          let match;
+          const substring = text.substring(start, end);
+          this.regex.lastIndex = 0;
+          while (match = this.regex.exec(substring)) {
+            const piece = match[0];
+            const cachedTokens = this.cache.get(piece);
+            if (cachedTokens) {
+              tokenCount += cachedTokens.length;
+              encodeLength += piece.length;
+              tokenIds.push(...cachedTokens);
+              tokenCountMap.set(tokenCount, encodeLength);
+            } else {
+              const bytes = this.textEncoder.encode(piece);
+              const token = this.encoder.get(bytes);
+              if (token !== undefined) {
+                this.cache.set(piece, [token]);
+                tokenCount++;
+                encodeLength += piece.length;
+                tokenIds.push(token);
+                tokenCountMap.set(tokenCount, encodeLength);
+              } else {
+                const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
+                this.cache.set(piece, encodedTokens);
+                tokenCount += encodedTokens.length;
+                encodeLength += piece.length;
+                for (const b of encodedTokens) {
+                  tokenIds.push(b);
+                }
+                tokenCountMap.set(tokenCount, encodeLength);
+              }
+            }
+          }
+        }
+        if (nextSpecial !== null) {
+          start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
+          tokenCount++;
+          encodeLength += nextSpecial[0].length;
+          tokenCountMap.set(tokenCount, encodeLength);
+          if (start >= text.length) {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      if (tokenCount <= maxTokenCount) {
+        return { tokenIds, text };
+      }
+      const prefixTokenCount = tokenCount - maxTokenCount;
+      let actualPrefixTokenCount = 0;
+      let actualPrefixStrLength = 0;
+      for (const [key, value] of tokenCountMap) {
+        if (key >= prefixTokenCount) {
+          actualPrefixTokenCount = key;
+          actualPrefixStrLength = value;
+          break;
+        }
+      }
+      if (actualPrefixTokenCount > maxTokenCount) {
+        const encodedTokens = this.encode(text, allowedSpecial);
+        const slicedTokens = encodedTokens.slice(encodedTokens.length - maxTokenCount);
+        return {
+          tokenIds: slicedTokens,
+          text: this.decode(slicedTokens)
+        };
+      }
+      return {
+        tokenIds: tokenIds.slice(actualPrefixTokenCount),
+        text: text.slice(actualPrefixStrLength)
+      };
+    }
+    decode(tokens) {
+      const decoded = [];
+      for (const token of tokens) {
+        let tokenBytes = [];
+        const value = this.decoder?.get(token);
+        if (value !== undefined) {
+          tokenBytes = Array.from(value);
+        } else {
+          const specialTokenValue = this.specialTokensDecoder?.get(token);
+          if (specialTokenValue !== undefined) {
+            const bytes = this.textEncoder.encode(specialTokenValue);
+            tokenBytes = Array.from(bytes.subarray(0, this.textEncoder.length));
+          }
+        }
+        decoded.push(...tokenBytes);
+      }
+      return this.textDecoder.decode(new Uint8Array(decoded));
+    }
+  }
+  exports2.TikTokenizer = TikTokenizer;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/tokenizerBuilder.js
+var require_tokenizerBuilder = __commonJS((exports2) => {
+  var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\node_modules\\@microsoft\\tiktokenizer\\dist";
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.MODEL_TO_ENCODING = undefined;
+  var tikTokenizer_1 = require_tikTokenizer();
+  var MODEL_PREFIX_TO_ENCODING = new Map([
+    ["gpt-4o-", "o200k_base"],
+    ["gpt-4-", "cl100k_base"],
+    ["gpt-3.5-turbo-", "cl100k_base"],
+    ["gpt-35-turbo-", "cl100k_base"]
+  ]);
+  exports2.MODEL_TO_ENCODING = new Map([
+    ["gpt-4o", "o200k_base"],
+    ["gpt-4", "cl100k_base"],
+    ["gpt-3.5-turbo", "cl100k_base"],
+    ["text-davinci-003", "p50k_base"],
+    ["text-davinci-002", "p50k_base"],
+    ["text-davinci-001", "r50k_base"],
+    ["text-curie-001", "r50k_base"],
+    ["text-babbage-001", "r50k_base"],
+    ["text-ada-001", "r50k_base"],
+    ["davinci", "r50k_base"],
+    ["curie", "r50k_base"],
+    ["babbage", "r50k_base"],
+    ["ada", "r50k_base"],
+    ["code-davinci-002", "p50k_base"],
+    ["code-davinci-001", "p50k_base"],
+    ["code-cushman-002", "p50k_base"],
+    ["code-cushman-001", "p50k_base"],
+    ["davinci-codex", "p50k_base"],
+    ["cushman-codex", "p50k_base"],
+    ["text-davinci-edit-001", "p50k_edit"],
+    ["code-davinci-edit-001", "p50k_edit"],
+    ["text-embedding-ada-002", "cl100k_base"],
+    ["text-similarity-davinci-001", "r50k_base"],
+    ["text-similarity-curie-001", "r50k_base"],
+    ["text-similarity-babbage-001", "r50k_base"],
+    ["text-similarity-ada-001", "r50k_base"],
+    ["text-search-davinci-doc-001", "r50k_base"],
+    ["text-search-curie-doc-001", "r50k_base"],
+    ["text-search-babbage-doc-001", "r50k_base"],
+    ["text-search-ada-doc-001", "r50k_base"],
+    ["code-search-babbage-code-001", "r50k_base"],
+    ["code-search-ada-code-001", "r50k_base"],
+    ["gpt2", "gpt2"]
+  ]);
+  var ENDOFTEXT = "<|endoftext|>";
+  var FIM_PREFIX = "<|fim_prefix|>";
+  var FIM_MIDDLE = "<|fim_middle|>";
+  var FIM_SUFFIX = "<|fim_suffix|>";
+  var ENDOFPROMPT = "<|endofprompt|>";
+  var REGEX_PATTERN_1 = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
+  var REGEX_PATTERN_2 = "(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+  var patterns = [
+    `[^\r
+\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)?`,
+    `[^\r
+\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)?`,
+    `\\p{N}{1,3}`,
+    ` ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*`,
+    `\\s*[\\r\\n]+`,
+    `\\s+(?!\\S)`,
+    `\\s+`
+  ];
+  var REGEX_PATTERN_3 = patterns.join("|");
+  function getEncoderFromModelName(modelName) {
+    let encoder = "";
+    if (!exports2.MODEL_TO_ENCODING.has(modelName)) {
+      for (const [prefix, encoding] of MODEL_PREFIX_TO_ENCODING) {
+        if (modelName.startsWith(prefix)) {
+          encoder = encoding;
+          break;
+        }
+      }
+    } else {
+      encoder = exports2.MODEL_TO_ENCODING.get(modelName);
+    }
+    return encoder;
+  }
+  async function fetchAndSaveFile(mergeableRanksFileUrl, filePath) {
+    const fs = require("fs");
+    const response = await fetch(mergeableRanksFileUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch file from ${mergeableRanksFileUrl}. Status code: ${response.status}`);
+    }
+    const text = await response.text();
+    fs.writeFileSync(filePath, text);
+  }
+  function getSpecialTokensByEncoder(encoder) {
+    let specialTokens = new Map([[ENDOFTEXT, 50256]]);
+    switch (encoder) {
+      case "o200k_base":
+        specialTokens = new Map([
+          [ENDOFTEXT, 199999],
+          [ENDOFPROMPT, 200018]
+        ]);
+        break;
+      case "cl100k_base":
+        specialTokens = new Map([
+          [ENDOFTEXT, 100257],
+          [FIM_PREFIX, 100258],
+          [FIM_MIDDLE, 100259],
+          [FIM_SUFFIX, 100260],
+          [ENDOFPROMPT, 100276]
+        ]);
+        break;
+      case "p50k_edit":
+        specialTokens = new Map([
+          [ENDOFTEXT, 50256],
+          [FIM_PREFIX, 50281],
+          [FIM_MIDDLE, 50282],
+          [FIM_SUFFIX, 50283]
+        ]);
+        break;
+      default:
+        break;
+    }
+    return specialTokens;
+  }
+  exports2.getSpecialTokensByEncoder = getSpecialTokensByEncoder;
+  function getSpecialTokensByModel(modelName) {
+    const encoderName = getEncoderFromModelName(modelName);
+    const specialTokens = getSpecialTokensByEncoder(encoderName);
+    return specialTokens;
+  }
+  exports2.getSpecialTokensByModel = getSpecialTokensByModel;
+  function getRegexByEncoder(encoder) {
+    switch (encoder) {
+      case "o200k_base":
+        return REGEX_PATTERN_3;
+      case "cl100k_base":
+        return REGEX_PATTERN_2;
+      default:
+        break;
+    }
+    return REGEX_PATTERN_1;
+  }
+  exports2.getRegexByEncoder = getRegexByEncoder;
+  function getRegexByModel(modelName) {
+    const encoderName = getEncoderFromModelName(modelName);
+    const regexPattern = getRegexByEncoder(encoderName);
+    return regexPattern;
+  }
+  exports2.getRegexByModel = getRegexByModel;
+  async function createByModelName(modelName, extraSpecialTokens = null) {
+    return createByEncoderName(getEncoderFromModelName(modelName), extraSpecialTokens);
+  }
+  exports2.createByModelName = createByModelName;
+  async function createByEncoderName(encoderName, extraSpecialTokens = null) {
+    let regexPattern;
+    let mergeableRanksFileUrl;
+    let specialTokens = getSpecialTokensByEncoder(encoderName);
+    switch (encoderName) {
+      case "o200k_base":
+        regexPattern = REGEX_PATTERN_3;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken`;
+        break;
+      case "cl100k_base":
+        regexPattern = REGEX_PATTERN_2;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken`;
+        break;
+      case "p50k_base":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/p50k_base.tiktoken`;
+        break;
+      case "p50k_edit":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/p50k_base.tiktoken`;
+        break;
+      case "r50k_base":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/r50k_base.tiktoken`;
+        break;
+      case "gpt2":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://raw.githubusercontent.com/microsoft/Tokenizer/main/model/gpt2.tiktoken`;
+        break;
+      default:
+        throw new Error(`Doesn't support this encoder [${encoderName}]`);
+    }
+    if (extraSpecialTokens !== null) {
+      specialTokens = new Map([...specialTokens, ...extraSpecialTokens]);
+    }
+    const fs = require("fs");
+    const path = require("path");
+    const fileName = path.basename(mergeableRanksFileUrl);
+    const dirPath = path.resolve(__dirname, "..", "model");
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+    const filePath = path.resolve(dirPath, fileName);
+    if (!fs.existsSync(filePath)) {
+      console.log(`Downloading file from ${mergeableRanksFileUrl}`);
+      await fetchAndSaveFile(mergeableRanksFileUrl, filePath);
+      console.log(`Saved file to ${filePath}`);
+    }
+    return createTokenizer(filePath, specialTokens, regexPattern);
+  }
+  exports2.createByEncoderName = createByEncoderName;
+  function createTokenizer(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize = 8192) {
+    const tikTokenizer = new tikTokenizer_1.TikTokenizer(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize);
+    return tikTokenizer;
+  }
+  exports2.createTokenizer = createTokenizer;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/index.js
+var require_dist2 = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.MODEL_TO_ENCODING = exports2.TikTokenizer = undefined;
+  var tikTokenizer_1 = require_tikTokenizer();
+  Object.defineProperty(exports2, "TikTokenizer", { enumerable: true, get: function() {
+    return tikTokenizer_1.TikTokenizer;
+  } });
+  var tokenizerBuilder_1 = require_tokenizerBuilder();
+  Object.defineProperty(exports2, "MODEL_TO_ENCODING", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.MODEL_TO_ENCODING;
+  } });
+  Object.defineProperty(exports2, "getRegexByEncoder", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getRegexByEncoder;
+  } });
+  Object.defineProperty(exports2, "getRegexByModel", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getRegexByModel;
+  } });
+  Object.defineProperty(exports2, "getSpecialTokensByEncoder", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getSpecialTokensByEncoder;
+  } });
+  Object.defineProperty(exports2, "getSpecialTokensByModel", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getSpecialTokensByModel;
+  } });
+  Object.defineProperty(exports2, "createByModelName", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.createByModelName;
+  } });
+  Object.defineProperty(exports2, "createByEncoderName", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.createByEncoderName;
+  } });
+  Object.defineProperty(exports2, "createTokenizer", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.createTokenizer;
+  } });
+});
+
 // src/extension.ts
 var exports_extension = {};
 __export(exports_extension, {
@@ -53707,7 +54096,7 @@ __export(exports_extension, {
   activate: () => activate
 });
 module.exports = __toCommonJS(exports_extension);
-var vscode7 = __toESM(require("vscode"));
+var vscode8 = __toESM(require("vscode"));
 
 // src/commands/manage-settings.ts
 var import_client_ssm = __toESM(require_dist_cjs70(), 1);
@@ -54225,9 +54614,9 @@ async function resolveSsmCredentials(globalState, secrets) {
 }
 
 // src/provider.ts
-var import_client_bedrock2 = __toESM(require_dist_cjs78(), 1);
+var import_client_bedrock2 = __toESM(require_dist_cjs77(), 1);
 var import_node_util2 = require("node:util");
-var vscode6 = __toESM(require("vscode"));
+var vscode7 = __toESM(require("vscode"));
 
 // src/aws-partition.ts
 function getPartitionFromRegion(region) {
@@ -54259,8 +54648,8 @@ function supportsGlobalInferenceProfiles(partition) {
 }
 
 // src/bedrock-client.ts
-var import_client_bedrock = __toESM(require_dist_cjs78(), 1);
-var import_client_bedrock_runtime = __toESM(require_dist_cjs94(), 1);
+var import_client_bedrock = __toESM(require_dist_cjs77(), 1);
+var import_client_bedrock_runtime = __toESM(require_dist_cjs92(), 1);
 var import_credential_providers2 = __toESM(require_dist_cjs72(), 1);
 var import_util_retry = __toESM(require_dist_cjs29(), 1);
 var nodeNativeFetch2 = __toESM(require_dist(), 1);
@@ -54268,13 +54657,13 @@ class BedrockAPIClient {
   authConfig;
   bedrockClient;
   bedrockRuntimeClient;
+  countTokensAvailable = undefined;
   fallbackBaseModelIds = new Set;
   fallbackInferenceProfileIds = new Set;
   inferenceProfileCache = new Map;
   profileCredentialsProviders = new Map;
   profileName;
   region;
-  countTokensAvailable = undefined;
   constructor(region, profileName) {
     this.region = region;
     this.profileName = profileName;
@@ -54693,6 +55082,13 @@ class BedrockAPIClient {
     this.profileCredentialsProviders.set(key, wrapped);
     return wrapped;
   }
+  normalizeInferenceProfileId(modelId) {
+    const parts = modelId.split(".");
+    if (parts.length > 2 && (parts[0].length === 2 || parts[0].length === 3 || parts[0] === "global")) {
+      return parts.slice(1).join(".");
+    }
+    return modelId;
+  }
   recreateClients() {
     this.bedrockClient = new import_client_bedrock.BedrockClient(this.getClientConfig());
     this.bedrockRuntimeClient = new import_client_bedrock_runtime.BedrockRuntimeClient(this.getClientConfig());
@@ -54727,13 +55123,6 @@ class BedrockAPIClient {
   async testModelAccess(modelId, abortSignal) {
     return this.testAccessViaConverse(modelId, "Model", abortSignal);
   }
-  normalizeInferenceProfileId(modelId) {
-    const parts = modelId.split(".");
-    if (parts.length > 2 && (parts[0].length === 2 || parts[0].length === 3 || parts[0] === "global")) {
-      return parts.slice(1).join(".");
-    }
-    return modelId;
-  }
 }
 
 class ListFoundationModelsDeniedError extends Error {
@@ -54752,7 +55141,7 @@ function createBearerTokenSigner(apiKey) {
 }
 
 // src/converters/messages.ts
-var import_client_bedrock_runtime2 = __toESM(require_dist_cjs94(), 1);
+var import_client_bedrock_runtime2 = __toESM(require_dist_cjs92(), 1);
 var import_node_util = require("node:util");
 var vscode4 = __toESM(require("vscode"));
 
@@ -54761,10 +55150,10 @@ function getModelProfile(modelId) {
   const defaultProfile = {
     requiresInterleavedThinkingHeader: false,
     supports1MContext: false,
+    supportsAdaptiveThinkingOnly: false,
     supportsCachingWithToolResults: false,
     supportsPromptCaching: false,
     supportsThinking: false,
-    supportsAdaptiveThinkingOnly: false,
     supportsThinkingEffort: false,
     supportsToolChoice: false,
     supportsToolResultStatus: false,
@@ -54787,10 +55176,10 @@ function getModelProfile(modelId) {
         return {
           requiresInterleavedThinkingHeader: false,
           supports1MContext: false,
+          supportsAdaptiveThinkingOnly: false,
           supportsCachingWithToolResults: false,
           supportsPromptCaching: true,
           supportsThinking: false,
-          supportsAdaptiveThinkingOnly: false,
           supportsThinkingEffort: false,
           supportsToolChoice: true,
           supportsToolResultStatus: false,
@@ -54808,10 +55197,10 @@ function getModelProfile(modelId) {
       return {
         requiresInterleavedThinkingHeader,
         supports1MContext: supports1MContext(modelId),
+        supportsAdaptiveThinkingOnly,
         supportsCachingWithToolResults,
         supportsPromptCaching: true,
         supportsThinking,
-        supportsAdaptiveThinkingOnly,
         supportsThinkingEffort,
         supportsToolChoice: true,
         supportsToolResultStatus: true,
@@ -54822,10 +55211,10 @@ function getModelProfile(modelId) {
       return {
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
+        supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
-        supportsAdaptiveThinkingOnly: false,
         supportsThinkingEffort: false,
         supportsToolChoice: false,
         supportsToolResultStatus: false,
@@ -54836,10 +55225,10 @@ function getModelProfile(modelId) {
       return {
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
+        supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
-        supportsAdaptiveThinkingOnly: false,
         supportsThinkingEffort: false,
         supportsToolChoice: true,
         supportsToolResultStatus: false,
@@ -55270,7 +55659,7 @@ function processUserMessageParts(msg, profile) {
 }
 
 // src/converters/tools.ts
-var import_client_bedrock_runtime3 = __toESM(require_dist_cjs94(), 1);
+var import_client_bedrock_runtime3 = __toESM(require_dist_cjs92(), 1);
 var import_vscode = require("vscode");
 
 // src/converters/schema.ts
@@ -55321,7 +55710,7 @@ function convertTools(options, modelId, extendedThinkingEnabled, promptCachingEn
 }
 
 // src/stream-processor.ts
-var import_client_bedrock_runtime4 = __toESM(require_dist_cjs94(), 1);
+var import_client_bedrock_runtime4 = __toESM(require_dist_cjs92(), 1);
 var vscode5 = __toESM(require("vscode"));
 
 // src/tool-buffer.ts
@@ -55515,8 +55904,11 @@ class StreamProcessor {
     logger.info("[Stream Processor] Metadata received:", metadata);
     if (metadata?.usage?.inputTokens !== undefined && metadata?.usage?.outputTokens !== undefined) {
       state.usage = {
+        cacheReadInputTokens: metadata.usage.cacheReadInputTokens,
+        cacheWriteInputTokens: metadata.usage.cacheWriteInputTokens,
         inputTokens: metadata.usage.inputTokens,
-        outputTokens: metadata.usage.outputTokens
+        outputTokens: metadata.usage.outputTokens,
+        totalTokens: metadata.usage.totalTokens
       };
       logger.debug("[Stream Processor] Token usage from stream:", state.usage);
     }
@@ -55543,8 +55935,10 @@ class StreamProcessor {
       state.capturedThinkingBlock ??= { text: "" };
       state.capturedThinkingBlock.text += reasoningText;
       try {
-        if (typeof vscode5.LanguageModelThinkingPart === "function") {
-          progress.report(new vscode5.LanguageModelThinkingPart(reasoningText));
+        const ThinkingPart = vscode5.LanguageModelThinkingPart;
+        if (typeof ThinkingPart === "function") {
+          const Ctor = ThinkingPart;
+          progress.report(new Ctor(reasoningText));
           state.hasEmittedThinking = true;
         }
       } catch (error) {
@@ -55651,10 +56045,19 @@ class StreamProcessor {
     if (state.hasEmittedThinking && state.stopReason === import_client_bedrock_runtime4.StopReason.END_TURN) {
       return;
     }
-    if (!token.isCancellationRequested) {
-      const reason = state.stopReason ? `Stop reason: ${state.stopReason}` : "Please try rephrasing your request.";
-      throw new Error(`No response content was generated. ${reason}`);
+    if (token.isCancellationRequested) {
+      return;
     }
+    if (state.stopReason === undefined) {
+      logger.warn("[Stream Processor] Stream closed without a messageStop event — likely transport truncation", {
+        hasCapturedThinking: !!state.capturedThinkingBlock?.text,
+        hasEmittedThinking: state.hasEmittedThinking,
+        textChunkCount: state.textChunkCount,
+        toolCallCount: state.toolCallCount
+      });
+      throw new Error("The connection to Amazon Bedrock was closed before the response completed. This is usually a transient network issue — please retry the request.");
+    }
+    throw new Error(`No response content was generated. Stop reason: ${state.stopReason}`);
   }
   validateContentFiltering(state) {
     if (state.stopReason !== import_client_bedrock_runtime4.StopReason.CONTENT_FILTERED) {
@@ -55722,8 +56125,132 @@ function hasBlockedGuardrail(guardrailData) {
   return false;
 }
 
+// src/tokenizer.ts
+var import_tiktokenizer = __toESM(require_dist2(), 1);
+var import_node_fs = require("node:fs");
+var import_node_path = require("node:path");
+var vscode6 = __toESM(require("vscode"));
+var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\src";
+var ENCODER = "o200k_base";
+var RANK_FILE_NAME = "o200k_base.tiktoken";
+var CACHE_SIZE = 5000;
+var TIKTOKENIZER_INTERNAL_CACHE = 64000;
+function findRankFile() {
+  const here = __dirname;
+  const candidates = [
+    import_node_path.join(here, RANK_FILE_NAME),
+    import_node_path.join(here, "tokenizer", RANK_FILE_NAME),
+    import_node_path.join(here, "..", "src", "tokenizer", RANK_FILE_NAME)
+  ];
+  for (const candidate of candidates) {
+    if (import_node_fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return;
+}
+var tokenizerInstance;
+var tokenizerInitFailed = false;
+function getTokenizer() {
+  if (tokenizerInstance !== undefined) {
+    return tokenizerInstance;
+  }
+  if (tokenizerInitFailed) {
+    return;
+  }
+  try {
+    const rankFile = findRankFile();
+    if (rankFile === undefined) {
+      tokenizerInitFailed = true;
+      logger.warn("[Tokenizer] Could not locate o200k_base.tiktoken; falling back to char-based estimation");
+      return;
+    }
+    tokenizerInstance = import_tiktokenizer.createTokenizer(rankFile, import_tiktokenizer.getSpecialTokensByEncoder(ENCODER), import_tiktokenizer.getRegexByEncoder(ENCODER), TIKTOKENIZER_INTERNAL_CACHE);
+    logger.debug("[Tokenizer] Initialized o200k_base tokenizer");
+    return tokenizerInstance;
+  } catch (error) {
+    tokenizerInitFailed = true;
+    logger.warn("[Tokenizer] Failed to initialize o200k_base tokenizer", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return;
+  }
+}
+var lengthCache = new Map;
+function countMessageTokens(message) {
+  let total = 0;
+  for (const part of message.content) {
+    if (part instanceof vscode6.LanguageModelTextPart) {
+      total += cachedTokenLength(part.value);
+      continue;
+    }
+    if (part instanceof vscode6.LanguageModelToolCallPart) {
+      const inputStr = JSON.stringify(part.input) ?? "";
+      total += cachedTokenLength(part.name) + cachedTokenLength(inputStr);
+      continue;
+    }
+    if (part instanceof vscode6.LanguageModelToolResultPart) {
+      for (const item of part.content) {
+        if (item instanceof vscode6.LanguageModelTextPart) {
+          total += cachedTokenLength(item.value);
+          continue;
+        }
+        try {
+          total += cachedTokenLength(JSON.stringify(item));
+        } catch {
+          total += 100;
+        }
+      }
+      continue;
+    }
+    if (typeof part === "object" && part !== null && "data" in part && "mimeType" in part) {
+      const dataPart = part;
+      total += dataPart.mimeType.startsWith("image/") ? Math.min(Math.ceil(dataPart.data.length / 50), 1600) : Math.ceil(dataPart.data.length / 4);
+    }
+  }
+  return total;
+}
+function countStringTokens(text) {
+  return cachedTokenLength(text);
+}
+function cachedTokenLength(text) {
+  if (text.length === 0) {
+    return 0;
+  }
+  const cached = lengthCache.get(text);
+  if (cached !== undefined) {
+    lengthCache.delete(text);
+    lengthCache.set(text, cached);
+    return cached;
+  }
+  const length = encodeOrEstimate(text);
+  if (lengthCache.size >= CACHE_SIZE) {
+    const oldestKey = lengthCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      lengthCache.delete(oldestKey);
+    }
+  }
+  lengthCache.set(text, length);
+  return length;
+}
+function encodeOrEstimate(text) {
+  const tokenizer = getTokenizer();
+  if (tokenizer === undefined) {
+    return Math.ceil(text.length / 3);
+  }
+  try {
+    return tokenizer.encode(text).length;
+  } catch (error) {
+    logger.warn("[Tokenizer] encode() failed; falling back to char-based estimate", {
+      error: error instanceof Error ? error.message : String(error),
+      textLength: text.length
+    });
+    return Math.ceil(text.length / 3);
+  }
+}
+
 // src/validation.ts
-var import_client_bedrock_runtime5 = __toESM(require_dist_cjs94(), 1);
+var import_client_bedrock_runtime5 = __toESM(require_dist_cjs92(), 1);
 function validateBedrockMessages(messages) {
   if (messages.length === 0) {
     throw new Error("Messages array cannot be empty");
@@ -55748,11 +56275,12 @@ class NoAccessibleModelsError extends Error {
     this.name = "NoAccessibleModelsError";
   }
 }
+var BEDROCK_MODEL_PICKER_CATEGORY = { label: "Amazon Bedrock", order: 50 };
 
 class BedrockChatModelProvider {
   secrets;
   globalState;
-  _onDidChangeLanguageModelInformation = new vscode6.EventEmitter;
+  _onDidChangeLanguageModelInformation = new vscode7.EventEmitter;
   onDidChangeLanguageModelChatInformation = this._onDidChangeLanguageModelInformation.event;
   chatEndpoints = [];
   client;
@@ -55782,10 +56310,10 @@ class BedrockChatModelProvider {
     const settings = await getBedrockSettings(this.globalState);
     const hasRunBefore = this.globalState.get("bedrock.hasRunBefore", false);
     if (!hasRunBefore && !options.silent) {
-      const action = await vscode6.window.showInformationMessage("Amazon Bedrock integration requires AWS credentials. Would you like to configure your AWS profile and region first?", "Configure Settings", "Use Default Credentials");
+      const action = await vscode7.window.showInformationMessage("Amazon Bedrock integration requires AWS credentials. Would you like to configure your AWS profile and region first?", "Configure Settings", "Use Default Credentials");
       await this.globalState.update("bedrock.hasRunBefore", true);
       if (action === "Configure Settings") {
-        await vscode6.commands.executeCommand("bedrock.manage");
+        await vscode7.commands.executeCommand("bedrock.manage");
         return [];
       } else if (action !== "Use Default Credentials") {
         return [];
@@ -55794,7 +56322,7 @@ class BedrockChatModelProvider {
     const authConfig = await this.getAuthConfig(options.silent);
     if (!authConfig) {
       if (!options.silent) {
-        vscode6.window.showErrorMessage("AWS Bedrock authentication not configured. Please run 'Manage Amazon Bedrock Provider'.");
+        vscode7.window.showErrorMessage("AWS Bedrock authentication not configured. Please run 'Manage Amazon Bedrock Provider'.");
       }
       return [];
     }
@@ -55851,8 +56379,10 @@ class BedrockChatModelProvider {
                 imageInput: vision,
                 toolCalling: true
               },
+              category: BEDROCK_MODEL_PICKER_CATEGORY,
               family: "bedrock",
               id: modelIdToUse,
+              isUserSelectable: true,
               maxInputTokens: maxInput,
               maxOutputTokens: maxOutput,
               name: m.modelName,
@@ -55879,8 +56409,10 @@ class BedrockChatModelProvider {
                 imageInput: vision,
                 toolCalling: true
               },
+              category: BEDROCK_MODEL_PICKER_CATEGORY,
               family: "bedrock",
               id: profile.modelArn,
+              isUserSelectable: true,
               maxInputTokens: maxInput,
               maxOutputTokens: maxOutput,
               name: profile.modelName,
@@ -55926,9 +56458,9 @@ class BedrockChatModelProvider {
         if (options.silent) {
           return await fetchModels();
         }
-        return await vscode6.window.withProgress({
+        return await vscode7.window.withProgress({
           cancellable: true,
-          location: vscode6.ProgressLocation.Notification,
+          location: vscode7.ProgressLocation.Notification,
           title: "Loading Bedrock models"
         }, fetchModels);
       } finally {
@@ -55942,7 +56474,7 @@ class BedrockChatModelProvider {
       if (!options.silent) {
         logger.error("[Bedrock Model Provider] Failed to fetch models", error);
         if (error instanceof ListFoundationModelsDeniedError) {
-          const manualModelId = await vscode6.window.showInputBox({
+          const manualModelId = await vscode7.window.showInputBox({
             placeHolder: "global.anthropic.claude-sonnet-4-6",
             prompt: "Model listing is blocked by AWS permissions. Enter a Bedrock model ID or inference profile ID to use."
           });
@@ -55958,9 +56490,9 @@ class BedrockChatModelProvider {
               return [manualInfo];
             }
           }
-          vscode6.window.showErrorMessage("Could not detect any Bedrock models with current permissions. Please update your AWS policy or provide a reachable model ID.");
+          vscode7.window.showErrorMessage("Could not detect any Bedrock models with current permissions. Please update your AWS policy or provide a reachable model ID.");
         } else if (error instanceof NoAccessibleModelsError) {
-          const manualModelId = await vscode6.window.showInputBox({
+          const manualModelId = await vscode7.window.showInputBox({
             placeHolder: "global.anthropic.claude-sonnet-4-6",
             prompt: "No accessible Bedrock models were detected. Enter a Bedrock model ID or inference profile ID to use."
           });
@@ -55976,9 +56508,9 @@ class BedrockChatModelProvider {
               return [manualInfo];
             }
           }
-          vscode6.window.showErrorMessage("Could not detect any accessible Bedrock models. Please update your AWS policy or provide a reachable model ID.");
+          vscode7.window.showErrorMessage("Could not detect any accessible Bedrock models. Please update your AWS policy or provide a reachable model ID.");
         } else {
-          vscode6.window.showErrorMessage(`Failed to fetch Bedrock models. Please check your AWS profile and region settings. Error: ${error instanceof Error ? error.message : String(error)}`);
+          vscode7.window.showErrorMessage(`Failed to fetch Bedrock models. Please check your AWS profile and region settings. Error: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       return [];
@@ -56035,7 +56567,7 @@ class BedrockChatModelProvider {
       const { budgetTokens, extendedThinkingEnabled: initialThinkingEnabled } = this.calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, settings.thinking.enabled);
       let extendedThinkingEnabled = initialThinkingEnabled;
       if (extendedThinkingEnabled) {
-        const assistantMsgCount = messages.filter((m) => m.role === vscode6.LanguageModelChatMessageRole.Assistant).length;
+        const assistantMsgCount = messages.filter((m) => m.role === vscode7.LanguageModelChatMessageRole.Assistant).length;
         if (assistantMsgCount > 1) {
           logger.warn("[Bedrock Model Provider] Disabling extended thinking - multiple assistant messages in history require individual thinking blocks", { assistantMsgCount });
           extendedThinkingEnabled = false;
@@ -56102,38 +56634,7 @@ class BedrockChatModelProvider {
   }
   async provideTokenCount(model, text, token) {
     const estimateTokens = (input) => {
-      if (typeof input === "string") {
-        return Math.ceil(input.length / 4);
-      }
-      let totalTokens = 0;
-      for (const part of input.content) {
-        if (part instanceof vscode6.LanguageModelTextPart) {
-          totalTokens += Math.ceil(part.value.length / 4);
-        } else if (part instanceof vscode6.LanguageModelToolCallPart) {
-          const inputStr = JSON.stringify(part.input) ?? "";
-          totalTokens += Math.ceil((part.name.length + inputStr.length) / 4);
-        } else if (part instanceof vscode6.LanguageModelToolResultPart) {
-          for (const item of part.content) {
-            if (item instanceof vscode6.LanguageModelTextPart) {
-              totalTokens += Math.ceil(item.value.length / 4);
-            } else {
-              try {
-                totalTokens += Math.ceil(JSON.stringify(item).length / 4);
-              } catch {
-                totalTokens += 100;
-              }
-            }
-          }
-        } else if (typeof part === "object" && part !== null && "data" in part && "mimeType" in part) {
-          const dataPart = part;
-          if (dataPart.mimeType.startsWith("image/")) {
-            totalTokens += Math.min(Math.ceil(dataPart.data.length / 50), 1600);
-          } else {
-            totalTokens += Math.ceil(dataPart.data.length / 4);
-          }
-        }
-      }
-      return totalTokens;
+      return typeof input === "string" ? countStringTokens(input) : countMessageTokens(input);
     };
     try {
       const abortController = new AbortController;
@@ -56481,7 +56982,7 @@ class BedrockChatModelProvider {
     if (method === "api-key") {
       let apiKey = await this.secrets.get("bedrock.apiKey");
       if (!apiKey && !silent) {
-        const entered = await vscode6.window.showInputBox({
+        const entered = await vscode7.window.showInputBox({
           ignoreFocusOut: true,
           password: true,
           prompt: "Enter your AWS Bedrock API key",
@@ -56507,7 +57008,7 @@ class BedrockChatModelProvider {
       const sessionToken = await this.secrets.get("bedrock.sessionToken");
       if (!accessKeyId || !secretAccessKey) {
         if (!silent) {
-          vscode6.window.showErrorMessage("AWS access keys not configured. Please run 'Manage Amazon Bedrock Provider'.");
+          vscode7.window.showErrorMessage("AWS access keys not configured. Please run 'Manage Amazon Bedrock Provider'.");
         }
         return;
       }
@@ -56552,13 +57053,13 @@ class BedrockChatModelProvider {
     logger.trace("[Bedrock Model Provider] Full VSCode messages for reproduction:", {
       messages: messages.map((msg) => ({
         content: msg.content.map((part) => {
-          if (part instanceof vscode6.LanguageModelTextPart) {
+          if (part instanceof vscode7.LanguageModelTextPart) {
             return { type: "text", value: part.value };
           }
-          if (part instanceof vscode6.LanguageModelToolCallPart) {
+          if (part instanceof vscode7.LanguageModelToolCallPart) {
             return { callId: part.callId, input: part.input, name: part.name, type: "toolCall" };
           }
-          if (part instanceof vscode6.LanguageModelToolResultPart) {
+          if (part instanceof vscode7.LanguageModelToolResultPart) {
             return { callId: part.callId, content: part.content, type: "toolResult" };
           }
           if (typeof part === "object" && part != null && "mimeType" in part && "data" in part) {
@@ -56576,12 +57077,12 @@ class BedrockChatModelProvider {
     });
     for (const [idx, msg] of messages.entries()) {
       const partTypes = msg.content.map((p) => {
-        if (p instanceof vscode6.LanguageModelTextPart)
+        if (p instanceof vscode7.LanguageModelTextPart)
           return "text";
-        if (p instanceof vscode6.LanguageModelToolCallPart) {
+        if (p instanceof vscode7.LanguageModelToolCallPart) {
           return `toolCall(${p.name})`;
         }
-        if (p instanceof vscode6.LanguageModelToolResultPart) {
+        if (p instanceof vscode7.LanguageModelToolResultPart) {
           return `toolResult(${p.callId})`;
         }
         if (typeof p === "object" && p != null && "mimeType" in p) {
@@ -56598,7 +57099,7 @@ class BedrockChatModelProvider {
       });
       logger.debug(`[Bedrock Model Provider] Message ${idx} (${msg.role}):`, partTypes);
       for (const part of msg.content) {
-        if (part instanceof vscode6.LanguageModelToolResultPart) {
+        if (part instanceof vscode7.LanguageModelToolResultPart) {
           let contentPreview = "[Unable to preview]";
           try {
             const contentStr = typeof part.content === "string" ? part.content : JSON.stringify(part.content);
@@ -56679,9 +57180,27 @@ class BedrockChatModelProvider {
       }
       if (result.usage) {
         logger.info("[Bedrock Model Provider] Actual token usage from stream:", {
+          cacheReadInputTokens: result.usage.cacheReadInputTokens,
+          cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
           inputTokens: result.usage.inputTokens,
-          outputTokens: result.usage.outputTokens
+          outputTokens: result.usage.outputTokens,
+          totalTokens: result.usage.totalTokens
         });
+        try {
+          const apiUsage = {
+            completion_tokens: result.usage.outputTokens,
+            prompt_tokens: result.usage.inputTokens,
+            prompt_tokens_details: {
+              cached_tokens: result.usage.cacheReadInputTokens ?? 0
+            },
+            total_tokens: result.usage.totalTokens ?? result.usage.inputTokens + result.usage.outputTokens
+          };
+          trackingProgress.report(vscode7.LanguageModelDataPart.json(apiUsage, "usage"));
+        } catch (error) {
+          logger.debug("[Bedrock Model Provider] Failed to report usage data part", {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
       }
       logger.info("[Bedrock Model Provider] Finished processing stream");
     } finally {
@@ -56723,15 +57242,15 @@ function isContextWindowOverflowError(error) {
 
 // src/extension.ts
 function activate(context) {
-  const outputChannel = vscode7.window.createOutputChannel("Amazon Bedrock Models", { log: true });
+  const outputChannel = vscode8.window.createOutputChannel("Amazon Bedrock Models", { log: true });
   logger.initialize(outputChannel, context.extensionMode);
   logger.info("Amazon Bedrock extension activated. For verbose debugging, set log level to Debug via the output channel dropdown menu.");
   const provider = new BedrockChatModelProvider(context.secrets, context.globalState);
-  const providerDisposable = vscode7.lm.registerLanguageModelChatProvider("bedrock", provider);
-  const manageCmdDisposable = vscode7.commands.registerCommand("bedrock.manage", async () => {
+  const providerDisposable = vscode8.lm.registerLanguageModelChatProvider("bedrock", provider);
+  const manageCmdDisposable = vscode8.commands.registerCommand("bedrock.manage", async () => {
     await manageSettings(context.secrets, context.globalState);
   });
-  const cfgDisposable = vscode7.workspace.onDidChangeConfiguration((e) => {
+  const cfgDisposable = vscode8.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration("bedrock.region") || e.affectsConfiguration("bedrock.profile") || e.affectsConfiguration("bedrock.preferredModel") || e.affectsConfiguration("bedrock.inferenceProfiles.preferRegional") || e.affectsConfiguration("bedrock.context1M.enabled") || e.affectsConfiguration("bedrock.promptCaching.enabled") || e.affectsConfiguration("bedrock.thinking.enabled") || e.affectsConfiguration("bedrock.thinking.budgetTokens") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.enabled") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.maxTokens")) {
       provider.notifyModelInformationChanged("configuration changed");
     }
@@ -56746,14 +57265,14 @@ function activate(context) {
       secretsRefreshHandle = undefined;
     }, 400);
   });
-  const secretsDebounceDisposable = new vscode7.Disposable(() => {
+  const secretsDebounceDisposable = new vscode8.Disposable(() => {
     if (secretsRefreshHandle) {
       clearTimeout(secretsRefreshHandle);
       secretsRefreshHandle = undefined;
     }
   });
   let lmRefreshHandle;
-  const lmDisposable = vscode7.lm.onDidChangeChatModels(() => {
+  const lmDisposable = vscode8.lm.onDidChangeChatModels(() => {
     if (!provider.isInitialFetchComplete()) {
       logger.debug("[Extension] Ignoring onDidChangeChatModels before initial fetch complete");
       return;
@@ -56766,7 +57285,7 @@ function activate(context) {
       lmRefreshHandle = undefined;
     }, 500);
   });
-  const lmDebounceDisposable = new vscode7.Disposable(() => {
+  const lmDebounceDisposable = new vscode8.Disposable(() => {
     if (lmRefreshHandle) {
       clearTimeout(lmRefreshHandle);
       lmRefreshHandle = undefined;
@@ -56778,5 +57297,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=CD8104239AE7616564756E2164756E21
+//# debugId=56BE2D330A67F29764756E2164756E21
 //# sourceMappingURL=extension.js.map
