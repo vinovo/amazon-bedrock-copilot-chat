@@ -36,6 +36,26 @@ class NoAccessibleModelsError extends Error {
   }
 }
 
+/**
+ * Extends the stable `LanguageModelChatInformation` with fields that VS Code's chat
+ * model picker reads from the proposed `chatProvider` API surface but does not actually
+ * gate behind a proposal check at runtime.
+ *
+ * - `isUserSelectable` is required for the model to appear in the model picker dropdown.
+ *   Since VS Code refactored the picker (~1.116+), `filterModelsForSession` filters out
+ *   any model whose metadata.isUserSelectable is not truthy, for ALL vendors. Without it
+ *   our models still show up in the Manage Models view but are missing from the picker,
+ *   so users cannot select/pin them.
+ * - `category` groups models under a named section in the picker. Without it, our models
+ *   fall under "Other Models" (collapsed, ordered last).
+ */
+type BedrockLanguageModelChatInformation = LanguageModelChatInformation & {
+  readonly isUserSelectable?: boolean;
+  readonly category?: { label: string; order: number };
+};
+
+const BEDROCK_MODEL_PICKER_CATEGORY = { label: "Amazon Bedrock", order: 50 } as const;
+
 export class BedrockChatModelProvider implements vscode.Disposable, LanguageModelChatProvider {
   // Event to notify VS Code that model information has changed (stable API name)
   private readonly _onDidChangeLanguageModelInformation = new vscode.EventEmitter<void>();
@@ -225,13 +245,15 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
                 : " (Regional Inference Profile)";
             }
 
-            const modelInfo: LanguageModelChatInformation = {
+            const modelInfo: BedrockLanguageModelChatInformation = {
               capabilities: {
                 imageInput: vision,
                 toolCalling: true,
               },
+              category: BEDROCK_MODEL_PICKER_CATEGORY,
               family: "bedrock",
               id: modelIdToUse,
+              isUserSelectable: true,
               maxInputTokens: maxInput,
               maxOutputTokens: maxOutput,
               name: m.modelName,
@@ -265,13 +287,15 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
             const maxOutput = limits.maxOutputTokens;
             const vision = profile.inputModalities.includes(ModelModality.IMAGE);
 
-            const profileInfo: LanguageModelChatInformation = {
+            const profileInfo: BedrockLanguageModelChatInformation = {
               capabilities: {
                 imageInput: vision,
                 toolCalling: true,
               },
+              category: BEDROCK_MODEL_PICKER_CATEGORY,
               family: "bedrock",
               id: profile.modelArn,
+              isUserSelectable: true,
               maxInputTokens: maxInput,
               maxOutputTokens: maxOutput,
               name: profile.modelName,
