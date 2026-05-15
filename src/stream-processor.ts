@@ -34,7 +34,7 @@ interface ProcessingState {
   textChunkCount: number;
   toolBuffer: ToolBuffer;
   toolCallCount: number;
-  usage: { inputTokens: number; outputTokens: number } | undefined;
+  usage: undefined | { inputTokens: number; outputTokens: number };
 }
 
 export class StreamProcessor {
@@ -466,12 +466,35 @@ export class StreamProcessor {
       return;
     }
 
-    if (!token.isCancellationRequested) {
-      const reason = state.stopReason
-        ? `Stop reason: ${state.stopReason}`
-        : "Please try rephrasing your request.";
-      throw new Error(`No response content was generated. ${reason}`);
+    if (token.isCancellationRequested) {
+      return;
     }
+
+    if (state.stopReason === undefined) {
+      // No `messageStop` event was ever received before the response stream
+      // closed. Bedrock's ConverseStream always terminates a successful response
+      // with a `messageStop` carrying a stopReason, so reaching this branch means
+      // the underlying connection (HTTP/2 / event-stream) was closed before the
+      // model signalled completion. This is a transport-level issue — network
+      // blip, idle timeout, proxy disconnect, ALB/NLB termination, or a service-
+      // side mid-stream drop — not a model-output issue. Tell the user that
+      // retrying (rather than rephrasing) is the appropriate action. The user
+      // can use the Retry button in the chat UI to fire a fresh request.
+      logger.warn(
+        "[Stream Processor] Stream closed without a messageStop event — likely transport truncation",
+        {
+          hasCapturedThinking: !!state.capturedThinkingBlock?.text,
+          hasEmittedThinking: state.hasEmittedThinking,
+          textChunkCount: state.textChunkCount,
+          toolCallCount: state.toolCallCount,
+        },
+      );
+      throw new Error(
+        "The connection to Amazon Bedrock was closed before the response completed. This is usually a transient network issue — please retry the request.",
+      );
+    }
+
+    throw new Error(`No response content was generated. Stop reason: ${state.stopReason}`);
   }
 
   private validateContentFiltering(state: ProcessingState): void {
