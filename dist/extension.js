@@ -56276,6 +56276,7 @@ class NoAccessibleModelsError extends Error {
   }
 }
 var BEDROCK_MODEL_PICKER_CATEGORY = { label: "Amazon Bedrock", order: 50 };
+var BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
 
 class BedrockChatModelProvider {
   secrets;
@@ -56285,6 +56286,7 @@ class BedrockChatModelProvider {
   chatEndpoints = [];
   client;
   initialFetchComplete = false;
+  lastKnownModels = [];
   lastThinkingBlock;
   streamProcessor;
   constructor(secrets, globalState) {
@@ -56324,7 +56326,7 @@ class BedrockChatModelProvider {
       if (!options.silent) {
         vscode7.window.showErrorMessage("AWS Bedrock authentication not configured. Please run 'Manage Amazon Bedrock Provider'.");
       }
-      return [];
+      return this.buildSentinelModelList(new Error("AWS Bedrock authentication not configured"));
     }
     this.client.setRegion(settings.region);
     if (authConfig.method === "profile") {
@@ -56452,6 +56454,7 @@ class BedrockChatModelProvider {
             model: info.id,
             modelMaxPromptTokens: info.maxInputTokens + info.maxOutputTokens
           }));
+          this.lastKnownModels = infos;
           this.initialFetchComplete = true;
           return infos;
         };
@@ -56491,6 +56494,7 @@ class BedrockChatModelProvider {
             }
           }
           vscode7.window.showErrorMessage("Could not detect any Bedrock models with current permissions. Please update your AWS policy or provide a reachable model ID.");
+          return this.buildSentinelModelList(error);
         } else if (error instanceof NoAccessibleModelsError) {
           const manualModelId = await vscode7.window.showInputBox({
             placeHolder: "global.anthropic.claude-sonnet-4-6",
@@ -56509,11 +56513,13 @@ class BedrockChatModelProvider {
             }
           }
           vscode7.window.showErrorMessage("Could not detect any accessible Bedrock models. Please update your AWS policy or provide a reachable model ID.");
+          return this.buildSentinelModelList(error);
         } else {
           vscode7.window.showErrorMessage(`Failed to fetch Bedrock models. Please check your AWS profile and region settings. Error: ${error instanceof Error ? error.message : String(error)}`);
+          return this.buildSentinelModelList(error);
         }
       }
-      return [];
+      return this.buildSentinelModelList(error);
     }
   }
   async provideLanguageModelChatInformation(options, token) {
@@ -56533,6 +56539,10 @@ class BedrockChatModelProvider {
         }
       }
     };
+    if (model.id === BEDROCK_ERROR_SENTINEL_ID) {
+      const reason = model.detail ?? "unknown error";
+      throw new Error(`Bedrock model list could not be loaded: ${reason}. ` + `Please verify your AWS profile/region (run 'Manage Amazon Bedrock Provider'), ` + `then re-open the model picker to retry.`);
+    }
     try {
       const authConfig = await this.getAuthConfig(true);
       if (!authConfig) {
@@ -56633,6 +56643,9 @@ class BedrockChatModelProvider {
     }
   }
   async provideTokenCount(model, text, token) {
+    if (model.id === BEDROCK_ERROR_SENTINEL_ID) {
+      return 0;
+    }
     const estimateTokens = (input) => {
       return typeof input === "string" ? countStringTokens(input) : countMessageTokens(input);
     };
@@ -56800,6 +56813,10 @@ class BedrockChatModelProvider {
     }
     this.configureAdditionalModelFields(requestInput, model.id, modelProfile, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort);
     return requestInput;
+  }
+  buildSentinelModelList(error) {
+    const sentinel = makeBedrockErrorSentinel(error);
+    return this.lastKnownModels.length > 0 ? [...this.lastKnownModels, sentinel] : [sentinel];
   }
   calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, thinkingEnabled) {
     const baseBudget = 16000;
@@ -57239,6 +57256,24 @@ function isContextWindowOverflowError(error) {
   const errorMessage = error instanceof Error ? error.message : import_node_util2.inspect(error);
   return CONTEXT_WINDOW_OVERFLOW_MESSAGES.some((msg) => errorMessage.includes(msg));
 }
+function makeBedrockErrorSentinel(error) {
+  const reason = error instanceof Error ? error.message : String(error);
+  return {
+    capabilities: { imageInput: false, toolCalling: false },
+    category: BEDROCK_MODEL_PICKER_CATEGORY,
+    detail: reason,
+    family: "bedrock-error",
+    id: BEDROCK_ERROR_SENTINEL_ID,
+    isUserSelectable: true,
+    maxInputTokens: 1,
+    maxOutputTokens: 1,
+    name: "⚠ Bedrock unavailable",
+    tooltip: `Failed to load Bedrock models: ${reason}
+
+` + `Sending a request will fail. Run 'Manage Amazon Bedrock Provider' to fix your AWS profile/region, ` + `then re-open the model picker to retry.`,
+    version: "1.0.0"
+  };
+}
 
 // src/extension.ts
 function activate(context) {
@@ -57297,5 +57332,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=56BE2D330A67F29764756E2164756E21
+//# debugId=D988AABDDA7D0FB064756E2164756E21
 //# sourceMappingURL=extension.js.map
