@@ -56,6 +56,18 @@ class NoAccessibleModelsError extends Error {
 
 const BEDROCK_MODEL_PICKER_CATEGORY = { label: "Amazon Bedrock", order: 50 } as const;
 
+/**
+ * Stable id used for the synthetic "⚠ Bedrock unavailable" entry that we surface
+ * in the model picker when fetching the real Bedrock model list fails. Sending
+ * a chat against this id is rejected up-front in `provideLanguageModelChatResponse`.
+ *
+ * The sentinel exists to defeat VS Code core's silent "reset selected model to
+ * default" behavior in `chatInputPart.shouldResetOnModelListChange` — by always
+ * keeping at least one Bedrock entry in the list, the user's selection is never
+ * silently swapped to a non-Bedrock model just because our fetch failed.
+ */
+export const BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
+
 export class BedrockChatModelProvider implements vscode.Disposable, LanguageModelChatProvider {
   // Event to notify VS Code that model information has changed (stable API name)
   private readonly _onDidChangeLanguageModelInformation = new vscode.EventEmitter<void>();
@@ -66,6 +78,13 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   private readonly client: BedrockAPIClient;
   /** Tracks whether the initial model fetch has completed (for avoiding startup feedback loops) */
   private initialFetchComplete = false;
+  /**
+   * Snapshot of the last successfully-fetched Bedrock model list. Used together
+   * with the error sentinel to keep at least one Bedrock entry visible in the
+   * model picker after a fetch failure, so VS Code core does not silently switch
+   * the user's selection to a non-Bedrock default model.
+   */
+  private lastKnownModels: BedrockLanguageModelChatInformation[] = [];
   private lastThinkingBlock?: ThinkingBlock;
   private readonly streamProcessor: StreamProcessor;
 
@@ -145,7 +164,9 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           "AWS Bedrock authentication not configured. Please run 'Manage Amazon Bedrock Provider'.",
         );
       }
-      return [];
+      // Surface a sentinel rather than an empty list so VS Code's chat UI does not
+      // silently switch the user's selection to a non-Bedrock default model.
+      return this.buildSentinelModelList(new Error("AWS Bedrock authentication not configured"));
     }
 
     this.client.setRegion(settings.region);
@@ -346,6 +367,10 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
             model: info.id,
             modelMaxPromptTokens: info.maxInputTokens + info.maxOutputTokens,
           }));
+          // Cache the successful fetch so subsequent failures can re-emit the
+          // same model entries (alongside an error sentinel) and avoid the
+          // VS Code core silent-fallback behavior.
+          this.lastKnownModels = infos as BedrockLanguageModelChatInformation[];
 
           // Mark initial fetch as complete to allow onDidChangeChatModels handling
           this.initialFetchComplete = true;
@@ -406,6 +431,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           vscode.window.showErrorMessage(
             "Could not detect any Bedrock models with current permissions. Please update your AWS policy or provide a reachable model ID.",
           );
+          return this.buildSentinelModelList(error);
         } else if (error instanceof NoAccessibleModelsError) {
           const manualModelId = await vscode.window.showInputBox({
             placeHolder: "global.anthropic.claude-sonnet-4-6",
@@ -434,13 +460,17 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           vscode.window.showErrorMessage(
             "Could not detect any accessible Bedrock models. Please update your AWS policy or provide a reachable model ID.",
           );
+          return this.buildSentinelModelList(error);
         } else {
           vscode.window.showErrorMessage(
             `Failed to fetch Bedrock models. Please check your AWS profile and region settings. Error: ${error instanceof Error ? error.message : String(error)}`,
           );
+          return this.buildSentinelModelList(error);
         }
       }
-      return [];
+      // Silent fetch (no UI prompts allowed): still surface a sentinel so the
+      // user's selected Bedrock model is not silently replaced.
+      return this.buildSentinelModelList(error);
     }
   }
 
@@ -475,6 +505,18 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         }
       },
     };
+
+    // Reject the synthetic error sentinel up-front. The sentinel exists only to
+    // keep a Bedrock entry in the picker after a model-list fetch failure (see
+    // `BEDROCK_ERROR_SENTINEL_ID`); it never represents a real model.
+    if (model.id === BEDROCK_ERROR_SENTINEL_ID) {
+      const reason = (model as BedrockLanguageModelChatInformation).detail ?? "unknown error";
+      throw new Error(
+        `Bedrock model list could not be loaded: ${reason}. ` +
+          `Please verify your AWS profile/region (run 'Manage Amazon Bedrock Provider'), ` +
+          `then re-open the model picker to retry.`,
+      );
+    }
 
     try {
       // Get authentication configuration (silent to avoid prompting during active chat)
@@ -712,6 +754,13 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     // context window before the request is sent). Accuracy here matters for
     // avoiding context-overflow errors from Bedrock at request time — see the
     // `isContextWindowOverflowError` defense in `provideLanguageModelChatResponse`.
+
+    // The error sentinel is not a real model — short-circuit before any AWS
+    // calls or tokenization work. Returning 0 keeps Copilot's prompt-shaping
+    // logic from doing pointless work for an entry that cannot be sent against.
+    if (model.id === BEDROCK_ERROR_SENTINEL_ID) {
+      return 0;
+    }
 
     // Fallback estimation when the Bedrock CountTokens API is unavailable
     // (e.g. IAM lacks `bedrock:CountTokens`). Delegates to the local
@@ -999,6 +1048,18 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     );
 
     return requestInput;
+  }
+
+  /**
+   * Returns the previously-known Bedrock model list (if any) plus a single
+   * synthetic "⚠ Bedrock unavailable" sentinel describing the failure. Keeping
+   * at least one Bedrock entry in the list prevents VS Code core's chat input
+   * part from silently resetting the user's selection to a non-Bedrock default
+   * model when our fetch fails. See `BEDROCK_ERROR_SENTINEL_ID` for context.
+   */
+  private buildSentinelModelList(error: unknown): BedrockLanguageModelChatInformation[] {
+    const sentinel = makeBedrockErrorSentinel(error);
+    return this.lastKnownModels.length > 0 ? [...this.lastKnownModels, sentinel] : [sentinel];
   }
 
   /**
@@ -1718,4 +1779,29 @@ function isContextWindowOverflowError(error: unknown): boolean {
 
   const errorMessage = error instanceof Error ? error.message : inspect(error);
   return CONTEXT_WINDOW_OVERFLOW_MESSAGES.some((msg) => errorMessage.includes(msg));
+}
+
+/**
+ * Build the synthetic error-sentinel model entry shown in the picker when the
+ * real Bedrock model list cannot be fetched. The failure reason is surfaced via
+ * `name` (visible) and `tooltip`/`detail` (hover) so the user can diagnose.
+ */
+function makeBedrockErrorSentinel(error: unknown): BedrockLanguageModelChatInformation {
+  const reason = error instanceof Error ? error.message : String(error);
+  return {
+    capabilities: { imageInput: false, toolCalling: false },
+    category: BEDROCK_MODEL_PICKER_CATEGORY,
+    detail: reason,
+    family: "bedrock-error",
+    id: BEDROCK_ERROR_SENTINEL_ID,
+    isUserSelectable: true,
+    maxInputTokens: 1,
+    maxOutputTokens: 1,
+    name: "⚠ Bedrock unavailable",
+    tooltip:
+      `Failed to load Bedrock models: ${reason}\n\n` +
+      `Sending a request will fail. Run 'Manage Amazon Bedrock Provider' to fix your AWS profile/region, ` +
+      `then re-open the model picker to retry.`,
+    version: "1.0.0",
+  };
 }

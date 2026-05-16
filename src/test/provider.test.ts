@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 import { convertMessages, stripThinkingContent } from "../converters/messages";
 import { convertTools } from "../converters/tools";
 import { logger } from "../logger";
-import { BedrockChatModelProvider } from "../provider";
+import { BEDROCK_ERROR_SENTINEL_ID, BedrockChatModelProvider } from "../provider";
 import type { BedrockModelSummary } from "../types";
 
 // Mock implementations extracted to avoid function nesting depth issues
@@ -65,7 +65,10 @@ const callCalcThinkingConfig = (
 
 suite("Amazon Bedrock Chat Provider Extension", () => {
   suite("provider", () => {
-    test("prepareLanguageModelChatInformation returns array (no key -> empty)", async () => {
+    test("prepareLanguageModelChatInformation returns array (no key -> sentinel only)", async () => {
+      // With no auth configured, the silent path now returns a single sentinel
+      // entry instead of an empty array, so VS Code core does not silently swap
+      // the user's selected Bedrock model to a default model.
       const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
 
       const infos = await provider.prepareLanguageModelChatInformation(
@@ -73,6 +76,141 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
         new vscode.CancellationTokenSource().token,
       );
       assert.ok(Array.isArray(infos));
+      assert.equal(infos.length, 1);
+      assert.equal(infos[0].id, BEDROCK_ERROR_SENTINEL_ID);
+    });
+
+    test("buildSentinelModelList returns sentinel-only when no successful fetch has occurred", () => {
+      const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
+      const result = (provider as any).buildSentinelModelList(
+        new Error("ExpiredToken: AWS credentials expired"),
+      ) as vscode.LanguageModelChatInformation[];
+
+      assert.equal(result.length, 1);
+      assert.equal(result[0].id, BEDROCK_ERROR_SENTINEL_ID);
+      assert.equal(result[0].family, "bedrock-error");
+      assert.ok(result[0].name.includes("Bedrock unavailable"));
+      // The failure reason must be surfaced via tooltip and detail so the
+      // user can diagnose without sending a request.
+      assert.ok((result[0] as any).detail.includes("ExpiredToken"));
+      assert.ok(result[0].tooltip?.includes("ExpiredToken"));
+      // Tool calling and image input are disabled so VS Code does not advertise
+      // capabilities that the sentinel cannot service.
+      assert.equal(result[0].capabilities?.toolCalling, false);
+      assert.equal(result[0].capabilities?.imageInput, false);
+    });
+
+    test("buildSentinelModelList appends sentinel to last-known model list after a prior success", () => {
+      const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
+      const cached: vscode.LanguageModelChatInformation[] = [
+        {
+          capabilities: { toolCalling: true },
+          family: "bedrock",
+          id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+          maxInputTokens: 200_000,
+          maxOutputTokens: 8192,
+          name: "Claude Sonnet 4.5",
+          version: "1.0.0",
+        } as unknown as vscode.LanguageModelChatInformation,
+      ];
+      (provider as any).lastKnownModels = cached;
+
+      const result = (provider as any).buildSentinelModelList(
+        new Error("network blip"),
+      ) as vscode.LanguageModelChatInformation[];
+
+      assert.equal(result.length, 2);
+      assert.equal(result[0].id, "anthropic.claude-sonnet-4-5-20250929-v1:0");
+      assert.equal(result[1].id, BEDROCK_ERROR_SENTINEL_ID);
+      // Sentinel always last so picker ordering is stable across failures.
+      assert.ok((result[1] as any).detail.includes("network blip"));
+    });
+
+    test("provideLanguageModelChatResponse rejects the error sentinel without contacting AWS", async () => {
+      const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
+      // Replace the AWS client with a throwing stub: if the sentinel guard fails
+      // and any AWS call is attempted, the test fails with a distinguishable error.
+      (provider as any).client = {
+        countTokens: async () => {
+          throw new Error("AWS should not be contacted for the sentinel");
+        },
+        fetchModels: async () => {
+          throw new Error("AWS should not be contacted for the sentinel");
+        },
+        resolveModelId: async () => {
+          throw new Error("AWS should not be contacted for the sentinel");
+        },
+        setAuthConfig: () => {},
+        setProfile: () => {},
+        setRegion: () => {},
+      };
+
+      const sentinelModel: vscode.LanguageModelChatInformation = {
+        capabilities: { imageInput: false, toolCalling: false },
+        detail: "ExpiredToken: AWS credentials expired",
+        family: "bedrock-error",
+        id: BEDROCK_ERROR_SENTINEL_ID,
+        maxInputTokens: 1,
+        maxOutputTokens: 1,
+        name: "⚠ Bedrock unavailable",
+        version: "1.0.0",
+      } as unknown as vscode.LanguageModelChatInformation;
+
+      const reportedParts: vscode.LanguageModelResponsePart[] = [];
+      const progress: vscode.Progress<vscode.LanguageModelResponsePart> = {
+        report: (part) => reportedParts.push(part),
+      };
+
+      await assert.rejects(
+        async () =>
+          provider.provideLanguageModelChatResponse(
+            sentinelModel,
+            [],
+            {} as Parameters<typeof provider.provideLanguageModelChatResponse>[2],
+            progress,
+            new vscode.CancellationTokenSource().token,
+          ),
+        (err: unknown) => {
+          assert.ok(err instanceof Error);
+          // The thrown error must surface the underlying reason so the user
+          // can diagnose without inspecting logs.
+          assert.ok(err.message.includes("ExpiredToken"));
+          assert.ok(err.message.includes("could not be loaded"));
+          return true;
+        },
+      );
+      // No content should be emitted for the sentinel.
+      assert.equal(reportedParts.length, 0);
+    });
+
+    test("provideTokenCount short-circuits to 0 for the error sentinel", async () => {
+      const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
+      // Same throwing stub as above: the sentinel guard must run before AWS.
+      (provider as any).client = {
+        countTokens: async () => {
+          throw new Error("AWS should not be contacted for the sentinel");
+        },
+        resolveModelId: async () => {
+          throw new Error("AWS should not be contacted for the sentinel");
+        },
+      };
+
+      const sentinelModel: vscode.LanguageModelChatInformation = {
+        capabilities: { imageInput: false, toolCalling: false },
+        family: "bedrock-error",
+        id: BEDROCK_ERROR_SENTINEL_ID,
+        maxInputTokens: 1,
+        maxOutputTokens: 1,
+        name: "⚠ Bedrock unavailable",
+        version: "1.0.0",
+      } as unknown as vscode.LanguageModelChatInformation;
+
+      const count = await provider.provideTokenCount(
+        sentinelModel,
+        "some prompt text that would otherwise be tokenized",
+        new vscode.CancellationTokenSource().token,
+      );
+      assert.equal(count, 0);
     });
 
     test("provideTokenCount counts simple string", async () => {
