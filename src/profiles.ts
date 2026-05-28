@@ -13,8 +13,11 @@ export interface ModelProfile {
   supports1MContext: boolean;
   /**
    * Whether the model uses adaptive thinking only (thinking.type: "adaptive"), without budget_tokens.
-   * Claude Opus 4.7 uses this mode exclusively; temperature/top_p/top_k are also unsupported.
-   * See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+   * Claude Opus 4.8 and Opus 4.7 use this mode exclusively; manual thinking returns 400.
+   * Temperature/top_p/top_k are also unsupported when extended thinking is active.
+   * See:
+   *   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+   *   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
    */
   supportsAdaptiveThinkingOnly: boolean;
   /**
@@ -137,14 +140,20 @@ export function getModelProfile(modelId: string): ModelProfile {
       // When extended thinking is enabled, cachePoint should only be added to messages without toolResult
       const supportsCachingWithToolResults = !supportsThinking;
 
-      // Opus 4.7 uses adaptive thinking only (thinking.type: "adaptive").
+      // Opus 4.8 and Opus 4.7 use adaptive thinking only (thinking.type: "adaptive").
       // budget_tokens and temperature/top_p/top_k are not supported and will return a 400 error.
-      // See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
-      const supportsAdaptiveThinkingOnly = modelId.includes("opus-4-7");
+      // See:
+      //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+      //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+      const supportsAdaptiveThinkingOnly =
+        modelId.includes("opus-4-8") || modelId.includes("opus-4-7");
 
-      // Adaptive thinking / thinking effort parameter is supported by Claude Opus 4.6, Opus 4.5, Sonnet 4.6, Sonnet 4.5, and Haiku 4.5
-      // Allows controlling token expenditure with "high", "medium", or "low" effort levels
+      // Adaptive thinking / thinking effort parameter is supported by Claude Opus 4.8, Opus 4.6,
+      // Opus 4.5, Sonnet 4.6, Sonnet 4.5, and Haiku 4.5.
+      // Allows controlling token expenditure with "high", "medium", or "low" effort levels.
+      // On Opus 4.8 the `effort` parameter defaults to "high" on all surfaces; explicit values override it.
       const supportsThinkingEffort =
+        modelId.includes("opus-4-8") ||
         modelId.includes("opus-4-6") ||
         modelId.includes("opus-4-5") ||
         modelId.includes("sonnet-4-6") ||
@@ -239,10 +248,12 @@ function getClaudeTokenLimits(
   normalizedModelId: string,
   enable1MContext: boolean,
 ): ModelTokenLimits {
-  // Claude Opus 4.7: always 1M context window, 128K max output
+  // Claude Opus 4.8 and Opus 4.7: always 1M context window, 128K max output
   // temperature/top_p/top_k not supported; adaptive thinking only (type: "adaptive")
-  // See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
-  if (normalizedModelId.includes("opus-4-7")) {
+  // See:
+  //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+  //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+  if (normalizedModelId.includes("opus-4-8") || normalizedModelId.includes("opus-4-7")) {
     return { maxInputTokens: 1_000_000 - 128_000, maxOutputTokens: 128_000 };
   }
 
@@ -330,12 +341,16 @@ function normalizeModelId(modelId: string): string {
 
 /**
  * Check if a model supports 1M context window
- * Claude Opus 4.6, Sonnet 4.6, and Sonnet 4.x models support extended 1M context via anthropic_beta parameter
+ * Claude Opus 4.8/4.7 always run at 1M; Opus 4.6 and Sonnet 4.x models support extended
+ * 1M context via the anthropic_beta parameter.
  */
 function supports1MContext(modelId: string): boolean {
-  // Opus 4.7 always has 1M context (no toggle needed — it's the only option per the AWS doc)
+  // Opus 4.8 and Opus 4.7 always have 1M context (no toggle needed — it's the only option per the AWS docs)
   return (
-    modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-4")
+    modelId.includes("opus-4-8") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("opus-4-6") ||
+    modelId.includes("sonnet-4")
   );
 }
 

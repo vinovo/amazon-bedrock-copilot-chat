@@ -47,6 +47,12 @@ type BedrockLanguageModelChatInformation = LanguageModelChatInformation & {
   readonly isUserSelectable?: boolean;
 };
 
+/**
+ * Effort level passed via `output_config.effort` for adaptive thinking and Claude
+ * effort-aware models. See https://platform.claude.com/docs/en/build-with-claude/effort
+ */
+type ThinkingEffort = "high" | "low" | "medium";
+
 class NoAccessibleModelsError extends Error {
   constructor() {
     super("No accessible Bedrock models detected");
@@ -832,6 +838,69 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   }
 
   /**
+   * Build additional model request fields for adaptive-thinking-only models (Opus 4.8 / 4.7).
+   * No budget_tokens, no temperature override. The `effort` parameter is honored when supported
+   * (Opus 4.8 defaults to "high").
+   * See:
+   *   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+   *   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
+   */
+  private applyAdaptiveThinkingFields(
+    requestInput: ConverseStreamCommandInput,
+    modelId: string,
+    modelProfile: ReturnType<typeof getModelProfile>,
+    betaHeaders: string[],
+    thinkingEffort?: ThinkingEffort,
+  ): void {
+    requestInput.additionalModelRequestFields = {
+      thinking: { type: "adaptive" },
+      ...(betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}),
+      ...(thinkingEffort && modelProfile.supportsThinkingEffort
+        ? { output_config: { effort: thinkingEffort } }
+        : {}),
+    };
+    logger.debug("[Bedrock Model Provider] Adaptive thinking enabled", {
+      anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
+      modelId,
+      thinkingEffort:
+        thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined,
+    });
+  }
+
+  /**
+   * Build additional model request fields for standard extended thinking models
+   * (Opus 4.6, 4.5, 4.1, Sonnet 4.6/4.5/4, Haiku 4.5, Sonnet 3.7).
+   * Requires temperature 1.0 and an explicit budget_tokens value.
+   */
+  private applyStandardExtendedThinkingFields(
+    requestInput: ConverseStreamCommandInput,
+    modelId: string,
+    budgetTokens: number,
+    betaHeaders: string[],
+    thinkingEffort?: ThinkingEffort,
+  ): void {
+    requestInput.inferenceConfig!.temperature = 1;
+    requestInput.additionalModelRequestFields = {
+      thinking: {
+        budget_tokens: budgetTokens,
+        type: "enabled",
+      },
+      ...(betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}),
+      // Add thinking effort for Claude Opus 4.5 and Sonnet 4.6 (controls token expenditure)
+      ...(thinkingEffort ? { output_config: { effort: thinkingEffort } } : {}),
+    };
+    logger.debug("[Bedrock Model Provider] Extended thinking enabled", {
+      anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
+      budgetTokens,
+      interleavedThinking: betaHeaders.includes("interleaved-thinking-2025-05-14"),
+      modelId,
+      supports1MContext: betaHeaders.includes("context-1m-2025-08-07"),
+      temperature: 1,
+      thinkingEffort: thinkingEffort ?? "(not applicable)",
+    });
+  }
+
+  /**
    * Build beta headers array for the request
    */
   private buildBetaHeaders(
@@ -994,7 +1063,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     extendedThinkingEnabled: boolean,
     budgetTokens: number,
     betaHeaders: string[],
-    thinkingEffort?: "high" | "low" | "medium",
+    thinkingEffort?: ThinkingEffort,
   ): ConverseStreamCommandInput {
     const requestInput: ConverseStreamCommandInput = {
       inferenceConfig: {
@@ -1004,7 +1073,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
             : model.maxOutputTokens,
           model.maxOutputTokens,
         ),
-        // Opus 4.7 does not support temperature/top_p/top_k — omit entirely for adaptive-only models
+        // Opus 4.8 / 4.7 do not support temperature/top_p/top_k — omit entirely for adaptive-only models
         ...(!modelProfile.supportsAdaptiveThinkingOnly && {
           temperature:
             typeof options.modelOptions?.temperature === "number"
@@ -1098,41 +1167,25 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     extendedThinkingEnabled: boolean,
     budgetTokens: number,
     betaHeaders: string[],
-    thinkingEffort?: "high" | "low" | "medium",
+    thinkingEffort?: ThinkingEffort,
   ): void {
     if (extendedThinkingEnabled) {
       if (modelProfile.supportsAdaptiveThinkingOnly) {
-        // Opus 4.7: adaptive thinking only — no budget_tokens, no temperature override
-        // See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
-        requestInput.additionalModelRequestFields = {
-          thinking: { type: "adaptive" },
-          ...(betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}),
-        };
-        logger.debug("[Bedrock Model Provider] Adaptive thinking enabled (Opus 4.7)", {
-          anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
+        this.applyAdaptiveThinkingFields(
+          requestInput,
           modelId,
-        });
+          modelProfile,
+          betaHeaders,
+          thinkingEffort,
+        );
       } else {
-        // Standard extended thinking: requires temperature 1.0 and budget_tokens
-        requestInput.inferenceConfig!.temperature = 1;
-        requestInput.additionalModelRequestFields = {
-          thinking: {
-            budget_tokens: budgetTokens,
-            type: "enabled",
-          },
-          ...(betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}),
-          // Add thinking effort for Claude Opus 4.5 and Sonnet 4.6 (controls token expenditure)
-          ...(thinkingEffort ? { output_config: { effort: thinkingEffort } } : {}),
-        };
-        logger.debug("[Bedrock Model Provider] Extended thinking enabled", {
-          anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
-          budgetTokens,
-          interleavedThinking: betaHeaders.includes("interleaved-thinking-2025-05-14"),
+        this.applyStandardExtendedThinkingFields(
+          requestInput,
           modelId,
-          supports1MContext: betaHeaders.includes("context-1m-2025-08-07"),
-          temperature: 1,
-          thinkingEffort: thinkingEffort ?? "(not applicable)",
-        });
+          budgetTokens,
+          betaHeaders,
+          thinkingEffort,
+        );
       }
       return;
     }

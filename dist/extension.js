@@ -54908,6 +54908,12 @@ class BedrockAPIClient {
     });
     const candidates = [
       {
+        baseModelId: "anthropic.claude-opus-4-8",
+        displayName: "Claude Opus 4.8",
+        globalProfileId: hasGlobalProfiles ? "global.anthropic.claude-opus-4-8" : null,
+        regionalProfileIds: [`${regionPrefix}.anthropic.claude-opus-4-8`]
+      },
+      {
         baseModelId: "anthropic.claude-opus-4-7",
         displayName: "Claude Opus 4.7",
         globalProfileId: hasGlobalProfiles ? "global.anthropic.claude-opus-4-7" : null,
@@ -55192,8 +55198,8 @@ function getModelProfile(modelId) {
       const supportsThinking = modelId.includes("opus-4") || modelId.includes("sonnet-4") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5") || modelId.includes("sonnet-3-7") || modelId.includes("sonnet-3.7");
       const requiresInterleavedThinkingHeader = modelId.includes("opus-4") || modelId.includes("sonnet-4") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
       const supportsCachingWithToolResults = !supportsThinking;
-      const supportsAdaptiveThinkingOnly = modelId.includes("opus-4-7");
-      const supportsThinkingEffort = modelId.includes("opus-4-6") || modelId.includes("opus-4-5") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-4-5") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
+      const supportsAdaptiveThinkingOnly = modelId.includes("opus-4-8") || modelId.includes("opus-4-7");
+      const supportsThinkingEffort = modelId.includes("opus-4-8") || modelId.includes("opus-4-6") || modelId.includes("opus-4-5") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-4-5") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
       return {
         requiresInterleavedThinkingHeader,
         supports1MContext: supports1MContext(modelId),
@@ -55254,7 +55260,7 @@ function getModelTokenLimits(modelId, enable1MContext = false) {
   };
 }
 function getClaudeTokenLimits(normalizedModelId, enable1MContext) {
-  if (normalizedModelId.includes("opus-4-7")) {
+  if (normalizedModelId.includes("opus-4-8") || normalizedModelId.includes("opus-4-7")) {
     return { maxInputTokens: 1e6 - 128000, maxOutputTokens: 128000 };
   }
   if (normalizedModelId.includes("opus-4-6")) {
@@ -55306,7 +55312,7 @@ function normalizeModelId(modelId) {
   return modelId;
 }
 function supports1MContext(modelId) {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-4");
+  return modelId.includes("opus-4-8") || modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-4");
 }
 
 // src/converters/messages.ts
@@ -56694,6 +56700,38 @@ class BedrockChatModelProvider {
       return estimateTokens(text);
     }
   }
+  applyAdaptiveThinkingFields(requestInput, modelId, modelProfile, betaHeaders, thinkingEffort) {
+    requestInput.additionalModelRequestFields = {
+      thinking: { type: "adaptive" },
+      ...betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {},
+      ...thinkingEffort && modelProfile.supportsThinkingEffort ? { output_config: { effort: thinkingEffort } } : {}
+    };
+    logger.debug("[Bedrock Model Provider] Adaptive thinking enabled", {
+      anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
+      modelId,
+      thinkingEffort: thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined
+    });
+  }
+  applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort) {
+    requestInput.inferenceConfig.temperature = 1;
+    requestInput.additionalModelRequestFields = {
+      thinking: {
+        budget_tokens: budgetTokens,
+        type: "enabled"
+      },
+      ...betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {},
+      ...thinkingEffort ? { output_config: { effort: thinkingEffort } } : {}
+    };
+    logger.debug("[Bedrock Model Provider] Extended thinking enabled", {
+      anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
+      budgetTokens,
+      interleavedThinking: betaHeaders.includes("interleaved-thinking-2025-05-14"),
+      modelId,
+      supports1MContext: betaHeaders.includes("context-1m-2025-08-07"),
+      temperature: 1,
+      thinkingEffort: thinkingEffort ?? "(not applicable)"
+    });
+  }
   buildBetaHeaders(modelProfile, extendedThinkingEnabled, context1MEnabled, thinkingEffortEnabled) {
     const anthropicBeta = [];
     if (extendedThinkingEnabled) {
@@ -56829,33 +56867,9 @@ class BedrockChatModelProvider {
   configureAdditionalModelFields(requestInput, modelId, modelProfile, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort) {
     if (extendedThinkingEnabled) {
       if (modelProfile.supportsAdaptiveThinkingOnly) {
-        requestInput.additionalModelRequestFields = {
-          thinking: { type: "adaptive" },
-          ...betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}
-        };
-        logger.debug("[Bedrock Model Provider] Adaptive thinking enabled (Opus 4.7)", {
-          anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
-          modelId
-        });
+        this.applyAdaptiveThinkingFields(requestInput, modelId, modelProfile, betaHeaders, thinkingEffort);
       } else {
-        requestInput.inferenceConfig.temperature = 1;
-        requestInput.additionalModelRequestFields = {
-          thinking: {
-            budget_tokens: budgetTokens,
-            type: "enabled"
-          },
-          ...betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {},
-          ...thinkingEffort ? { output_config: { effort: thinkingEffort } } : {}
-        };
-        logger.debug("[Bedrock Model Provider] Extended thinking enabled", {
-          anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
-          budgetTokens,
-          interleavedThinking: betaHeaders.includes("interleaved-thinking-2025-05-14"),
-          modelId,
-          supports1MContext: betaHeaders.includes("context-1m-2025-08-07"),
-          temperature: 1,
-          thinkingEffort: thinkingEffort ?? "(not applicable)"
-        });
+        this.applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort);
       }
       return;
     }
@@ -57332,5 +57346,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=D988AABDDA7D0FB064756E2164756E21
+//# debugId=2F960AD2A10CC7C964756E2164756E21
 //# sourceMappingURL=extension.js.map
