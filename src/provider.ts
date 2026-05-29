@@ -129,6 +129,20 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   public notifyModelInformationChanged(reason?: string): void {
     const suffix = reason ? `: ${reason}` : "";
     logger.debug(`[Bedrock Model Provider] Signaling model info refresh${suffix}`);
+    // Snapshot the cached endpoints right before the refresh so we can correlate
+    // any subsequent context-window-tracker ("X / Y tokens" badge) denominator
+    // changes with the trigger that caused them. The next call to
+    // `prepareLanguageModelChatInformation` will rebuild this list and emit a
+    // "models rebuilt" log; comparing the two reveals which model(s) changed
+    // their max input/output limits and why the badge denominator moved.
+    logger.debug("[Bedrock Model Provider] Cached endpoints at refresh time:", {
+      endpoints: this.chatEndpoints.map((e) => ({
+        model: e.model,
+        modelMaxPromptTokens: e.modelMaxPromptTokens,
+      })),
+      endpointsCount: this.chatEndpoints.length,
+      reason: reason ?? "unspecified",
+    });
     this._onDidChangeLanguageModelInformation.fire();
   }
 
@@ -380,6 +394,22 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
 
           // Mark initial fetch as complete to allow onDidChangeChatModels handling
           this.initialFetchComplete = true;
+
+          // Log the effective per-model limits after the rebuild so we can
+          // diagnose context-window badge denominator changes. The badge
+          // denominator in VS Code is `maxInputTokens + maxOutputTokens`
+          // looked up from the model registered with this provider, so any
+          // shift in these numbers between rebuilds will visibly move the
+          // badge on the next request.
+          logger.debug("[Bedrock Model Provider] Models rebuilt with effective token limits:", {
+            context1MEnabled: settings.context1M.enabled,
+            models: infos.map((info) => ({
+              id: info.id,
+              maxInputTokens: info.maxInputTokens,
+              maxOutputTokens: info.maxOutputTokens,
+              totalContextWindow: info.maxInputTokens + info.maxOutputTokens,
+            })),
+          });
 
           return infos;
         };
@@ -1724,9 +1754,44 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
 
       // Log actual token usage from the stream metadata for observability
       if (result.usage) {
+        // Look up the request-time effective context window for this model
+        // so the badge numerator (this turn's prompt_tokens) and denominator
+        // (modelMaxPromptTokens = maxInputTokens + maxOutputTokens) can be
+        // correlated 1:1 in the logs. If the badge "resets" to a smaller
+        // value but the denominator here is unchanged, the numerator must
+        // have legitimately shrunk (Copilot trimmed history). If the
+        // denominator changed, the model list was rebuilt with different
+        // limits between this turn and the previous.
+        const cachedEndpoint = this.chatEndpoints.find((e) => e.model === requestInput.modelId);
+        // Bedrock's `inputTokens` excludes cached prompt tokens (those are
+        // surfaced separately under `cacheReadInputTokens` / `cacheWriteInputTokens`).
+        // The model still "sees" the cached portion of the prompt, so include
+        // it when reporting the badge numerator — otherwise the tracker shrinks
+        // dramatically on cache-hit legs of an agent loop and inflates again on
+        // legs that re-encode large new content. This mirrors OpenAI's
+        // convention where `prompt_tokens` is the full prompt size and
+        // `prompt_tokens_details.cached_tokens` is a sub-figure.
+        const cachedInputTokens =
+          (result.usage.cacheReadInputTokens ?? 0) + (result.usage.cacheWriteInputTokens ?? 0);
+        const effectivePromptTokens = result.usage.inputTokens + cachedInputTokens;
+        const usedTokens = effectivePromptTokens + result.usage.outputTokens;
+        const denominator = cachedEndpoint?.modelMaxPromptTokens;
+        const percentage =
+          typeof denominator === "number" && denominator > 0
+            ? Math.round((usedTokens / denominator) * 1000) / 10
+            : undefined;
         logger.info("[Bedrock Model Provider] Actual token usage from stream:", {
           cacheReadInputTokens: result.usage.cacheReadInputTokens,
           cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
+          // Mirrors what VS Code's chatContextUsageWidget computes: the badge
+          // shows `(prompt_tokens + completion_tokens) / (maxInputTokens + maxOutputTokens)`.
+          // Track these here so log scrubs of the badge resetting can be
+          // matched directly against provider-reported numbers.
+          contextWindow_effectivePromptTokens: effectivePromptTokens,
+          contextWindow_modelId: requestInput.modelId,
+          contextWindow_modelMaxPromptTokens: denominator,
+          contextWindow_percentage: percentage,
+          contextWindow_usedTokens: usedTokens,
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
           totalTokens: result.usage.totalTokens,
@@ -1744,14 +1809,25 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         // See: extensions/copilot/src/platform/endpoint/common/endpointTypes.ts
         //      (`CustomDataPartMimeTypes.Usage = 'usage'`)
         try {
+          // OpenAI convention (which Copilot Chat's badge follows):
+          //   prompt_tokens                  = full prompt the model sees
+          //   prompt_tokens_details.cached   = cached subset of prompt_tokens
+          //   completion_tokens              = generated tokens
+          //   total_tokens                   = prompt_tokens + completion_tokens
+          // Bedrock instead reports `inputTokens` as the *non-cached* fresh
+          // input only, with cache hits/writes broken out separately. Sum them
+          // back together so the badge tracks total conversation size, not
+          // per-leg deltas (otherwise an agent loop sees the badge swing
+          // wildly between cache-write legs (~tiny) and cache-miss legs
+          // (~large) even though the conversation is monotonically growing).
+          const promptTokens = effectivePromptTokens;
           const apiUsage = {
             completion_tokens: result.usage.outputTokens,
-            prompt_tokens: result.usage.inputTokens,
+            prompt_tokens: promptTokens,
             prompt_tokens_details: {
               cached_tokens: result.usage.cacheReadInputTokens ?? 0,
             },
-            total_tokens:
-              result.usage.totalTokens ?? result.usage.inputTokens + result.usage.outputTokens,
+            total_tokens: promptTokens + result.usage.outputTokens,
           };
           // `LanguageModelDataPart.json` UTF-8-encodes the value and creates a
           // data part with the given MIME. Equivalent to constructing a part

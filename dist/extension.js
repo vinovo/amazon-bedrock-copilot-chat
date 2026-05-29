@@ -56312,6 +56312,14 @@ class BedrockChatModelProvider {
   notifyModelInformationChanged(reason) {
     const suffix = reason ? `: ${reason}` : "";
     logger.debug(`[Bedrock Model Provider] Signaling model info refresh${suffix}`);
+    logger.debug("[Bedrock Model Provider] Cached endpoints at refresh time:", {
+      endpoints: this.chatEndpoints.map((e) => ({
+        model: e.model,
+        modelMaxPromptTokens: e.modelMaxPromptTokens
+      })),
+      endpointsCount: this.chatEndpoints.length,
+      reason: reason ?? "unspecified"
+    });
     this._onDidChangeLanguageModelInformation.fire();
   }
   async prepareLanguageModelChatInformation(options, token) {
@@ -56462,6 +56470,15 @@ class BedrockChatModelProvider {
           }));
           this.lastKnownModels = infos;
           this.initialFetchComplete = true;
+          logger.debug("[Bedrock Model Provider] Models rebuilt with effective token limits:", {
+            context1MEnabled: settings.context1M.enabled,
+            models: infos.map((info) => ({
+              id: info.id,
+              maxInputTokens: info.maxInputTokens,
+              maxOutputTokens: info.maxOutputTokens,
+              totalContextWindow: info.maxInputTokens + info.maxOutputTokens
+            }))
+          });
           return infos;
         };
         if (options.silent) {
@@ -57210,21 +57227,33 @@ class BedrockChatModelProvider {
         });
       }
       if (result.usage) {
+        const cachedEndpoint = this.chatEndpoints.find((e) => e.model === requestInput.modelId);
+        const cachedInputTokens = (result.usage.cacheReadInputTokens ?? 0) + (result.usage.cacheWriteInputTokens ?? 0);
+        const effectivePromptTokens = result.usage.inputTokens + cachedInputTokens;
+        const usedTokens = effectivePromptTokens + result.usage.outputTokens;
+        const denominator = cachedEndpoint?.modelMaxPromptTokens;
+        const percentage = typeof denominator === "number" && denominator > 0 ? Math.round(usedTokens / denominator * 1000) / 10 : undefined;
         logger.info("[Bedrock Model Provider] Actual token usage from stream:", {
           cacheReadInputTokens: result.usage.cacheReadInputTokens,
           cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
+          contextWindow_effectivePromptTokens: effectivePromptTokens,
+          contextWindow_modelId: requestInput.modelId,
+          contextWindow_modelMaxPromptTokens: denominator,
+          contextWindow_percentage: percentage,
+          contextWindow_usedTokens: usedTokens,
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
           totalTokens: result.usage.totalTokens
         });
         try {
+          const promptTokens = effectivePromptTokens;
           const apiUsage = {
             completion_tokens: result.usage.outputTokens,
-            prompt_tokens: result.usage.inputTokens,
+            prompt_tokens: promptTokens,
             prompt_tokens_details: {
               cached_tokens: result.usage.cacheReadInputTokens ?? 0
             },
-            total_tokens: result.usage.totalTokens ?? result.usage.inputTokens + result.usage.outputTokens
+            total_tokens: promptTokens + result.usage.outputTokens
           };
           trackingProgress.report(vscode7.LanguageModelDataPart.json(apiUsage, "usage"));
         } catch (error) {
@@ -57346,5 +57375,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=2F960AD2A10CC7C964756E2164756E21
+//# debugId=8C9881C92A9675D464756E2164756E21
 //# sourceMappingURL=extension.js.map
