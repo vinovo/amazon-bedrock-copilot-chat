@@ -24,8 +24,8 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { fromIni } from "@aws-sdk/credential-providers";
 import type { AwsCredentialIdentity, AwsCredentialIdentityProvider } from "@aws-sdk/types";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { AdaptiveRetryStrategy, DefaultRateLimiter } from "@smithy/util-retry";
-import * as nodeNativeFetch from "smithy-node-native-fetch";
 
 import {
   getPartitionFromRegion,
@@ -693,8 +693,8 @@ export class BedrockAPIClient {
 
   private getClientConfig(): BedrockClientConfig & BedrockRuntimeClientConfig {
     const base = {
-      ...nodeNativeFetch,
       region: this.region,
+      requestHandler: new NodeHttpHandler(),
       retryStrategy: new AdaptiveRetryStrategy(
         async () => 10, // maxAttempts provider function
         {
@@ -861,7 +861,9 @@ export class BedrockAPIClient {
       }
       logger.warn(
         `[Bedrock API Client] Unexpected error testing ${resourceType} ${modelId}`,
-        error,
+        error instanceof Error
+          ? { cause: String((error as Error & { cause?: unknown }).cause), message: error.message }
+          : error,
       );
       return false;
     }

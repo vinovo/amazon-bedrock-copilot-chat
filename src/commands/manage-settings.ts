@@ -1,7 +1,7 @@
 import { paginateGetParametersByPath, SSMClient } from "@aws-sdk/client-ssm";
 import { fromIni } from "@aws-sdk/credential-providers";
 import type { AwsCredentialIdentity, AwsCredentialIdentityProvider } from "@aws-sdk/types";
-import * as nodeNativeFetch from "smithy-node-native-fetch";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import * as vscode from "vscode";
 
 import { getProfileSdkUaAppId, listAwsProfiles } from "../aws-profiles";
@@ -25,7 +25,7 @@ export async function getBedrockRegionsFromSSM(
     const client = new SSMClient({
       region: "us-east-1",
       ...(credentials ? { credentials } : {}),
-      ...nodeNativeFetch,
+      requestHandler: new NodeHttpHandler(),
     });
 
     try {
