@@ -86,8 +86,17 @@ const BEDROCK_MODEL_PICKER_CATEGORY = { label: "Amazon Bedrock", order: 50 } as 
 export const BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
 
 export class BedrockChatModelProvider implements vscode.Disposable, LanguageModelChatProvider {
+  /**
+   * Length of the echo-suppression window. Must comfortably exceed the time
+   * between our `.fire()` and VS Code bouncing `onDidChangeChatModels` back
+   * (a full re-query of `prepareLanguageModelChatInformation`, including AWS
+   * calls), while staying short enough that a user selection change made
+   * immediately afterwards is not swallowed.
+   */
+  private static readonly MODEL_CHANGE_ECHO_WINDOW_MS = 5000;
   // Event to notify VS Code that model information has changed (stable API name)
   private readonly _onDidChangeLanguageModelInformation = new vscode.EventEmitter<void>();
+
   readonly onDidChangeLanguageModelChatInformation =
     this._onDidChangeLanguageModelInformation.event;
 
@@ -104,6 +113,19 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   private lastKnownModels: BedrockLanguageModelChatInformation[] = [];
   private lastThinkingBlock?: ThinkingBlock;
   private readonly streamProcessor: StreamProcessor;
+  /**
+   * Timestamp (ms since epoch) until which incoming `onDidChangeChatModels`
+   * events should be treated as echoes of our own refresh and ignored.
+   *
+   * When we fire `_onDidChangeLanguageModelInformation`, VS Code re-queries the
+   * provider, the global chat-model list changes, and VS Code bounces an
+   * `onDidChangeChatModels` event right back at us. Without suppression the
+   * extension's own handler treats that echo as a user-initiated change and
+   * fires again — an infinite ~2s refresh loop. We arm a short window around
+   * each self-initiated fire so the resulting echo is dropped, while genuine
+   * user selection changes (which are NOT preceded by our fire) still pass.
+   */
+  private suppressModelChangeUntil = 0;
 
   constructor(
     private readonly secrets: vscode.SecretStorage,
@@ -154,6 +176,11 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       endpointsCount: this.chatEndpoints.length,
       reason: reason ?? "unspecified",
     });
+    // Arm the echo-suppression window *before* firing: VS Code will re-query the
+    // provider and bounce an `onDidChangeChatModels` event back at us, which the
+    // extension's handler must ignore to avoid a self-sustaining refresh loop.
+    this.suppressModelChangeUntil =
+      Date.now() + BedrockChatModelProvider.MODEL_CHANGE_ECHO_WINDOW_MS;
     this._onDidChangeLanguageModelInformation.fire();
   }
 
@@ -884,6 +911,16 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       }
       return estimateTokens(text);
     }
+  }
+
+  /**
+   * Returns true if an incoming `onDidChangeChatModels` event should be ignored
+   * because it is an echo of a refresh we just initiated ourselves (see
+   * `suppressModelChangeUntil`). Genuine user-initiated selection changes are
+   * not preceded by our own fire and therefore fall outside the window.
+   */
+  public shouldIgnoreModelChangeEcho(): boolean {
+    return Date.now() < this.suppressModelChangeUntil;
   }
 
   /**

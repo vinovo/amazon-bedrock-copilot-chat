@@ -77,6 +77,15 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
+    // Skip events that are echoes of a refresh we just initiated. Firing our own
+    // change emitter makes VS Code re-query the provider and bounce an
+    // onDidChangeChatModels event right back; treating that as a user-initiated
+    // change would re-trigger the refresh and spin forever (~2s cycle).
+    if (provider.shouldIgnoreModelChangeEcho()) {
+      logger.debug("[Extension] Ignoring onDidChangeChatModels echo from self-initiated refresh");
+      return;
+    }
+
     // Debounce to coalesce rapid changes
     if (lmRefreshHandle) {
       clearTimeout(lmRefreshHandle);

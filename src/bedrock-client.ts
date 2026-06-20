@@ -37,9 +37,24 @@ import { logger } from "./logger";
 import type { AuthConfig, BedrockModelSummary } from "./types";
 
 export class BedrockAPIClient {
+  // Cooldown duration in milliseconds before ListFoundationModels is retried after repeated denials (30 minutes)
+  private static readonly LIST_FOUNDATION_MODELS_COOLDOWN_MS = 30 * 60 * 1000;
+  // Maximum ListFoundationModels denials before entering cooldown (3 attempts total)
+  private static readonly LIST_FOUNDATION_MODELS_MAX_RETRIES = 3;
+  // Cooldown duration in milliseconds (30 minutes)
+  private static readonly LIST_INFERENCE_PROFILES_COOLDOWN_MS = 30 * 60 * 1000;
+  // Maximum retry attempts before entering cooldown (3 attempts total)
+  private static readonly LIST_INFERENCE_PROFILES_MAX_RETRIES = 3;
+  // Short-lived cache TTL for fetchModels results (applies to both successful and fallback detection)
+  // Prevents repeated remote requests when the model list is refreshed frequently in a short window.
+  private static readonly MODELS_CACHE_TTL_MS = 60 * 1000;
   private authConfig?: AuthConfig;
   private bedrockClient: BedrockClient;
   private bedrockRuntimeClient: BedrockRuntimeClient;
+  // Short-lived cache of the last non-empty fetchModels result (success or fallback)
+  private cachedModels: BedrockModelSummary[] | undefined = undefined;
+  // Timestamp (ms since epoch) when cachedModels was populated
+  private cachedModelsAt = 0;
   // Tracks whether CountTokens API is available (circuit breaker to avoid repeated permission failures)
   private countTokensAvailable: boolean | undefined = undefined;
   // Tracks base model IDs detected when no inference profile is accessible
@@ -49,6 +64,19 @@ export class BedrockAPIClient {
   // Cache for inference profile ID -> base model ID mappings
   // This avoids repeated API calls to GetInferenceProfile
   private readonly inferenceProfileCache = new Map<string, string>();
+  // Timestamp when ListFoundationModels becomes retryable again after the denial cooldown
+  private listFoundationModelsCooldownUntil = 0;
+  // Number of consecutive ListFoundationModels denials observed
+  private listFoundationModelsDenialCount = 0;
+  // Circuit breaker: true once ListFoundationModels denials have exhausted retries (within cooldown)
+  private listFoundationModelsDenied = false;
+  // Circuit breaker for ListInferenceProfiles API
+  // undefined = not yet attempted, true = available, false = unavailable (denied or failed repeatedly)
+  private listInferenceProfilesAvailable: boolean | undefined = undefined;
+  // Timestamp when listInferenceProfiles becomes available again after cooldown
+  private listInferenceProfilesCooldownUntil = 0;
+  // Number of failed attempts for ListInferenceProfiles
+  private listInferenceProfilesFailureCount = 0;
   private readonly profileCredentialsProviders = new Map<string, AwsCredentialIdentityProvider>();
 
   private profileName?: string;
@@ -157,6 +185,11 @@ export class BedrockAPIClient {
     foundationModels: BedrockModelSummary[],
     abortSignal?: AbortSignal,
   ): Promise<BedrockModelSummary[]> {
+    // Shared circuit breaker with fetchInferenceProfiles (both use bedrock:ListInferenceProfiles).
+    if (this.shouldSkipListInferenceProfiles()) {
+      return [];
+    }
+
     try {
       const profiles: BedrockModelSummary[] = [];
       const paginator = paginateListInferenceProfiles(
@@ -210,14 +243,29 @@ export class BedrockAPIClient {
       }
 
       logger.debug(`[Bedrock API Client] Found ${profiles.length} application inference profiles`);
+      this.recordListInferenceProfilesSuccess();
       return profiles;
     } catch (error) {
+      // AccessDenied on bedrock:ListInferenceProfiles trips the shared circuit breaker so we
+      // stop re-attempting (and re-logging) on every model-list refresh.
+      if (error instanceof AccessDeniedException) {
+        this.recordListInferenceProfilesDenial();
+        return [];
+      }
+
       logger.error("[Bedrock API Client] Failed to fetch application inference profiles", error);
       return [];
     }
   }
 
   async fetchInferenceProfiles(abortSignal?: AbortSignal): Promise<Set<string>> {
+    // Shared circuit breaker: fetchInferenceProfiles and fetchApplicationInferenceProfiles
+    // both invoke the bedrock:ListInferenceProfiles action, so a denial on either trips the
+    // same breaker and skips both during the cooldown window.
+    if (this.shouldSkipListInferenceProfiles()) {
+      return new Set();
+    }
+
     try {
       const profileIds = new Set<string>();
       const paginator = paginateListInferenceProfiles(
@@ -241,14 +289,57 @@ export class BedrockAPIClient {
         }
       }
 
+      this.recordListInferenceProfilesSuccess();
       return profileIds;
     } catch (error) {
+      // Check if this is an AccessDeniedException (permission denied)
+      if (error instanceof AccessDeniedException) {
+        this.recordListInferenceProfilesDenial();
+        return new Set();
+      }
+
       logger.error("[Bedrock API Client] Failed to fetch inference profiles", error);
       return new Set();
     }
   }
 
   async fetchModels(abortSignal?: AbortSignal): Promise<BedrockModelSummary[]> {
+    // Serve from short-lived cache when fresh. Covers BOTH successful ListFoundationModels
+    // results and fallback detection results, so frequent model-list refreshes within the
+    // TTL window do not trigger repeated remote requests (the expensive part is the
+    // fallback fan-out of Converse/availability probes in detectAnthropicFallbackModels).
+    // The fallback ID sets (read by the provider after this call) are preserved because the
+    // cache path does not clear or recompute them.
+    const now = Date.now();
+    if (this.cachedModels && now - this.cachedModelsAt < BedrockAPIClient.MODELS_CACHE_TTL_MS) {
+      logger.trace(
+        `[Bedrock API Client] Serving ${this.cachedModels.length} models from cache (age ${Math.round(
+          (now - this.cachedModelsAt) / 1000,
+        )}s)`,
+      );
+      return this.cachedModels;
+    }
+
+    // Circuit breaker: once ListFoundationModels has been denied enough times, skip it during
+    // the cooldown window and go straight to fallback detection.
+    if (this.listFoundationModelsDenied) {
+      if (now < this.listFoundationModelsCooldownUntil) {
+        const remainingMinutes = Math.ceil(
+          (this.listFoundationModelsCooldownUntil - now) / (60 * 1000),
+        );
+        logger.trace(
+          `[Bedrock API Client] Skipping ListFoundationModels (denied, ${remainingMinutes}m cooldown remaining), using fallback detection`,
+        );
+        return this.fetchFallbackModels(abortSignal);
+      }
+      // Cooldown expired, reset and allow ListFoundationModels retry
+      logger.info(
+        "[Bedrock API Client] ListFoundationModels cooldown expired, resetting for retry",
+      );
+      this.listFoundationModelsDenied = false;
+      this.listFoundationModelsDenialCount = 0;
+    }
+
     try {
       // Clear any fallback state before fetching
       this.fallbackInferenceProfileIds.clear();
@@ -287,20 +378,33 @@ export class BedrockAPIClient {
         `[Bedrock API Client] Excluded ${allModels.length - activeModels.length} deprecated models`,
       );
 
+      // Success: reset the denial counter and cache the result.
+      this.listFoundationModelsDenialCount = 0;
+      this.cacheModels(activeModels);
       return activeModels;
     } catch (error) {
       if (error instanceof AccessDeniedException) {
-        logger.warn(
-          "[Bedrock API Client] ListFoundationModels denied, attempting fallback Anthropic profiles",
-          error,
-        );
+        this.listFoundationModelsDenialCount++;
 
-        const fallbackModels = await this.detectAnthropicFallbackModels(abortSignal);
-        if (fallbackModels.length > 0) {
-          return fallbackModels;
+        if (
+          this.listFoundationModelsDenialCount >=
+          BedrockAPIClient.LIST_FOUNDATION_MODELS_MAX_RETRIES
+        ) {
+          this.listFoundationModelsDenied = true;
+          this.listFoundationModelsCooldownUntil =
+            Date.now() + BedrockAPIClient.LIST_FOUNDATION_MODELS_COOLDOWN_MS;
+          logger.warn(
+            `[Bedrock API Client] ListFoundationModels denied after ${this.listFoundationModelsDenialCount} attempts - entering ${BedrockAPIClient.LIST_FOUNDATION_MODELS_COOLDOWN_MS / (60 * 1000)}min cooldown. Using fallback Anthropic profile detection.`,
+            error,
+          );
+        } else {
+          logger.warn(
+            `[Bedrock API Client] ListFoundationModels denied (attempt ${this.listFoundationModelsDenialCount}/${BedrockAPIClient.LIST_FOUNDATION_MODELS_MAX_RETRIES}), attempting fallback Anthropic profiles`,
+            error,
+          );
         }
 
-        throw new ListFoundationModelsDeniedError(error);
+        return this.fetchFallbackModels(abortSignal);
       }
 
       logger.error("[Bedrock API Client] Failed to fetch Bedrock models", error);
@@ -444,16 +548,29 @@ export class BedrockAPIClient {
   }
 
   setAuthConfig(authConfig: AuthConfig | undefined): void {
+    // Only recreate clients if authConfig actually changed
+    const authConfigChanged = JSON.stringify(this.authConfig) !== JSON.stringify(authConfig);
+    if (!authConfigChanged) {
+      return;
+    }
     this.authConfig = authConfig;
     this.recreateClients();
   }
 
   setProfile(profileName: string | undefined): void {
+    // Only recreate clients if profile actually changed
+    if (this.profileName === profileName) {
+      return;
+    }
     this.profileName = profileName;
     this.recreateClients();
   }
 
   setRegion(region: string): void {
+    // Only recreate clients if region actually changed
+    if (this.region === region) {
+      return;
+    }
     this.region = region;
     this.recreateClients();
   }
@@ -482,6 +599,15 @@ export class BedrockAPIClient {
    */
   async testInferenceProfileAccess(profileId: string, abortSignal?: AbortSignal): Promise<boolean> {
     return this.testAccessViaConverse(profileId, "Inference profile", abortSignal);
+  }
+
+  /** Store a non-empty model list in the short-lived cache. */
+  private cacheModels(models: BedrockModelSummary[]): void {
+    if (models.length === 0) {
+      return;
+    }
+    this.cachedModels = models;
+    this.cachedModelsAt = Date.now();
   }
 
   /**
@@ -691,6 +817,25 @@ export class BedrockAPIClient {
     return detected;
   }
 
+  /**
+   * Run fallback Anthropic-profile detection and cache a non-empty result.
+   * Clears stale fallback ID sets first so detection repopulates them. Throws
+   * {@link ListFoundationModelsDeniedError} when no model is reachable.
+   */
+  private async fetchFallbackModels(abortSignal?: AbortSignal): Promise<BedrockModelSummary[]> {
+    // Clear stale fallback state before re-detecting (detectAnthropicFallbackModels repopulates).
+    this.fallbackInferenceProfileIds.clear();
+    this.fallbackBaseModelIds.clear();
+
+    const fallbackModels = await this.detectAnthropicFallbackModels(abortSignal);
+    if (fallbackModels.length > 0) {
+      this.cacheModels(fallbackModels);
+      return fallbackModels;
+    }
+
+    throw new ListFoundationModelsDeniedError();
+  }
+
   private getClientConfig(): BedrockClientConfig & BedrockRuntimeClientConfig {
     const base = {
       region: this.region,
@@ -809,6 +954,48 @@ export class BedrockAPIClient {
     return modelId;
   }
 
+  /**
+   * Record an AccessDenied on bedrock:ListInferenceProfiles. After
+   * {@link LIST_INFERENCE_PROFILES_MAX_RETRIES} consecutive denials the shared circuit
+   * breaker opens for {@link LIST_INFERENCE_PROFILES_COOLDOWN_MS}. Shared by both
+   * fetchInferenceProfiles and fetchApplicationInferenceProfiles.
+   */
+  private recordListInferenceProfilesDenial(): void {
+    // Already open — nothing to escalate.
+    if (this.listInferenceProfilesAvailable === false) {
+      return;
+    }
+
+    this.listInferenceProfilesFailureCount++;
+
+    if (
+      this.listInferenceProfilesFailureCount >= BedrockAPIClient.LIST_INFERENCE_PROFILES_MAX_RETRIES
+    ) {
+      this.listInferenceProfilesAvailable = false;
+      this.listInferenceProfilesCooldownUntil =
+        Date.now() + BedrockAPIClient.LIST_INFERENCE_PROFILES_COOLDOWN_MS;
+      logger.warn(
+        `[Bedrock API Client] ListInferenceProfiles API denied after ${this.listInferenceProfilesFailureCount} attempts - entering ${BedrockAPIClient.LIST_INFERENCE_PROFILES_COOLDOWN_MS / (60 * 1000)}min cooldown. Using default Anthropic inference profiles.`,
+      );
+    } else {
+      logger.info(
+        `[Bedrock API Client] ListInferenceProfiles API denied (attempt ${this.listInferenceProfilesFailureCount}/${BedrockAPIClient.LIST_INFERENCE_PROFILES_MAX_RETRIES}), will retry on next refresh`,
+      );
+    }
+  }
+
+  /**
+   * Record a successful bedrock:ListInferenceProfiles call, marking the shared breaker
+   * available and clearing the consecutive-failure counter.
+   */
+  private recordListInferenceProfilesSuccess(): void {
+    if (this.listInferenceProfilesAvailable !== true) {
+      logger.debug("[Bedrock API Client] ListInferenceProfiles API confirmed available");
+    }
+    this.listInferenceProfilesAvailable = true;
+    this.listInferenceProfilesFailureCount = 0;
+  }
+
   private recreateClients(): void {
     this.bedrockClient = new BedrockClient(this.getClientConfig());
     this.bedrockRuntimeClient = new BedrockRuntimeClient(this.getClientConfig());
@@ -818,6 +1005,48 @@ export class BedrockAPIClient {
 
     // Reset CountTokens availability flag since permissions may differ with new credentials
     this.countTokensAvailable = undefined;
+
+    // Reset ListInferenceProfiles circuit breaker since permissions may differ with new credentials
+    this.listInferenceProfilesAvailable = undefined;
+    this.listInferenceProfilesFailureCount = 0;
+    this.listInferenceProfilesCooldownUntil = 0;
+
+    // Reset ListFoundationModels circuit breaker since permissions may differ with new credentials
+    this.listFoundationModelsDenied = false;
+    this.listFoundationModelsDenialCount = 0;
+    this.listFoundationModelsCooldownUntil = 0;
+
+    // Invalidate the short-lived models cache since results differ across regions/credentials
+    this.cachedModels = undefined;
+    this.cachedModelsAt = 0;
+  }
+
+  /**
+   * Returns true when the shared ListInferenceProfiles breaker is open and still within its
+   * cooldown window (callers should skip the call). Resets the breaker when the cooldown has
+   * elapsed so the next call retries.
+   */
+  private shouldSkipListInferenceProfiles(): boolean {
+    if (this.listInferenceProfilesAvailable !== false) {
+      return false;
+    }
+
+    const now = Date.now();
+    if (now < this.listInferenceProfilesCooldownUntil) {
+      const remainingMinutes = Math.ceil(
+        (this.listInferenceProfilesCooldownUntil - now) / (60 * 1000),
+      );
+      logger.trace(
+        `[Bedrock API Client] Skipping ListInferenceProfiles (cooldown active, ${remainingMinutes}m remaining)`,
+      );
+      return true;
+    }
+
+    // Cooldown expired, reset and allow retry
+    logger.info("[Bedrock API Client] ListInferenceProfiles cooldown expired, resetting for retry");
+    this.listInferenceProfilesAvailable = undefined;
+    this.listInferenceProfilesFailureCount = 0;
+    return false;
   }
 
   /**

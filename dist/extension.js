@@ -51443,13 +51443,26 @@ var import_credential_providers2 = __toESM(require_dist_cjs58(), 1);
 var import_node_http_handler2 = __toESM(require_dist_cjs13(), 1);
 var import_util_retry = __toESM(require_dist_cjs24(), 1);
 class BedrockAPIClient {
+  static LIST_FOUNDATION_MODELS_COOLDOWN_MS = 30 * 60 * 1000;
+  static LIST_FOUNDATION_MODELS_MAX_RETRIES = 3;
+  static LIST_INFERENCE_PROFILES_COOLDOWN_MS = 30 * 60 * 1000;
+  static LIST_INFERENCE_PROFILES_MAX_RETRIES = 3;
+  static MODELS_CACHE_TTL_MS = 60 * 1000;
   authConfig;
   bedrockClient;
   bedrockRuntimeClient;
+  cachedModels = undefined;
+  cachedModelsAt = 0;
   countTokensAvailable = undefined;
   fallbackBaseModelIds = new Set;
   fallbackInferenceProfileIds = new Set;
   inferenceProfileCache = new Map;
+  listFoundationModelsCooldownUntil = 0;
+  listFoundationModelsDenialCount = 0;
+  listFoundationModelsDenied = false;
+  listInferenceProfilesAvailable = undefined;
+  listInferenceProfilesCooldownUntil = 0;
+  listInferenceProfilesFailureCount = 0;
   profileCredentialsProviders = new Map;
   profileName;
   region;
@@ -51500,6 +51513,9 @@ class BedrockAPIClient {
     }
   }
   async fetchApplicationInferenceProfiles(foundationModels, abortSignal) {
+    if (this.shouldSkipListInferenceProfiles()) {
+      return [];
+    }
     try {
       const profiles = [];
       const paginator = import_client_bedrock.paginateListInferenceProfiles({ client: this.bedrockClient }, { typeEquals: "APPLICATION" }, { abortSignal });
@@ -51539,13 +51555,21 @@ class BedrockAPIClient {
         }
       }
       logger.debug(`[Bedrock API Client] Found ${profiles.length} application inference profiles`);
+      this.recordListInferenceProfilesSuccess();
       return profiles;
     } catch (error) {
+      if (error instanceof import_client_bedrock.AccessDeniedException) {
+        this.recordListInferenceProfilesDenial();
+        return [];
+      }
       logger.error("[Bedrock API Client] Failed to fetch application inference profiles", error);
       return [];
     }
   }
   async fetchInferenceProfiles(abortSignal) {
+    if (this.shouldSkipListInferenceProfiles()) {
+      return new Set;
+    }
     try {
       const profileIds = new Set;
       const paginator = import_client_bedrock.paginateListInferenceProfiles({ client: this.bedrockClient }, {}, { abortSignal });
@@ -51561,13 +51585,33 @@ class BedrockAPIClient {
           }
         }
       }
+      this.recordListInferenceProfilesSuccess();
       return profileIds;
     } catch (error) {
+      if (error instanceof import_client_bedrock.AccessDeniedException) {
+        this.recordListInferenceProfilesDenial();
+        return new Set;
+      }
       logger.error("[Bedrock API Client] Failed to fetch inference profiles", error);
       return new Set;
     }
   }
   async fetchModels(abortSignal) {
+    const now = Date.now();
+    if (this.cachedModels && now - this.cachedModelsAt < BedrockAPIClient.MODELS_CACHE_TTL_MS) {
+      logger.trace(`[Bedrock API Client] Serving ${this.cachedModels.length} models from cache (age ${Math.round((now - this.cachedModelsAt) / 1000)}s)`);
+      return this.cachedModels;
+    }
+    if (this.listFoundationModelsDenied) {
+      if (now < this.listFoundationModelsCooldownUntil) {
+        const remainingMinutes = Math.ceil((this.listFoundationModelsCooldownUntil - now) / (60 * 1000));
+        logger.trace(`[Bedrock API Client] Skipping ListFoundationModels (denied, ${remainingMinutes}m cooldown remaining), using fallback detection`);
+        return this.fetchFallbackModels(abortSignal);
+      }
+      logger.info("[Bedrock API Client] ListFoundationModels cooldown expired, resetting for retry");
+      this.listFoundationModelsDenied = false;
+      this.listFoundationModelsDenialCount = 0;
+    }
     try {
       this.fallbackInferenceProfileIds.clear();
       this.fallbackBaseModelIds.clear();
@@ -51595,15 +51639,20 @@ class BedrockAPIClient {
         return !isDeprecated;
       });
       logger.debug(`[Bedrock API Client] Excluded ${allModels.length - activeModels.length} deprecated models`);
+      this.listFoundationModelsDenialCount = 0;
+      this.cacheModels(activeModels);
       return activeModels;
     } catch (error) {
       if (error instanceof import_client_bedrock.AccessDeniedException) {
-        logger.warn("[Bedrock API Client] ListFoundationModels denied, attempting fallback Anthropic profiles", error);
-        const fallbackModels = await this.detectAnthropicFallbackModels(abortSignal);
-        if (fallbackModels.length > 0) {
-          return fallbackModels;
+        this.listFoundationModelsDenialCount++;
+        if (this.listFoundationModelsDenialCount >= BedrockAPIClient.LIST_FOUNDATION_MODELS_MAX_RETRIES) {
+          this.listFoundationModelsDenied = true;
+          this.listFoundationModelsCooldownUntil = Date.now() + BedrockAPIClient.LIST_FOUNDATION_MODELS_COOLDOWN_MS;
+          logger.warn(`[Bedrock API Client] ListFoundationModels denied after ${this.listFoundationModelsDenialCount} attempts - entering ${BedrockAPIClient.LIST_FOUNDATION_MODELS_COOLDOWN_MS / (60 * 1000)}min cooldown. Using fallback Anthropic profile detection.`, error);
+        } else {
+          logger.warn(`[Bedrock API Client] ListFoundationModels denied (attempt ${this.listFoundationModelsDenialCount}/${BedrockAPIClient.LIST_FOUNDATION_MODELS_MAX_RETRIES}), attempting fallback Anthropic profiles`, error);
         }
-        throw new ListFoundationModelsDeniedError(error);
+        return this.fetchFallbackModels(abortSignal);
       }
       logger.error("[Bedrock API Client] Failed to fetch Bedrock models", error);
       throw error;
@@ -51663,14 +51712,24 @@ class BedrockAPIClient {
     }
   }
   setAuthConfig(authConfig) {
+    const authConfigChanged = JSON.stringify(this.authConfig) !== JSON.stringify(authConfig);
+    if (!authConfigChanged) {
+      return;
+    }
     this.authConfig = authConfig;
     this.recreateClients();
   }
   setProfile(profileName) {
+    if (this.profileName === profileName) {
+      return;
+    }
     this.profileName = profileName;
     this.recreateClients();
   }
   setRegion(region) {
+    if (this.region === region) {
+      return;
+    }
     this.region = region;
     this.recreateClients();
   }
@@ -51684,6 +51743,13 @@ class BedrockAPIClient {
   }
   async testInferenceProfileAccess(profileId, abortSignal) {
     return this.testAccessViaConverse(profileId, "Inference profile", abortSignal);
+  }
+  cacheModels(models) {
+    if (models.length === 0) {
+      return;
+    }
+    this.cachedModels = models;
+    this.cachedModelsAt = Date.now();
   }
   async detectAnthropicFallbackModels(abortSignal) {
     const partition = getPartitionFromRegion(this.region);
@@ -51814,6 +51880,16 @@ class BedrockAPIClient {
     logger.info(`[Bedrock API Client] Fallback detection found ${detected.length} Anthropic model(s)`);
     return detected;
   }
+  async fetchFallbackModels(abortSignal) {
+    this.fallbackInferenceProfileIds.clear();
+    this.fallbackBaseModelIds.clear();
+    const fallbackModels = await this.detectAnthropicFallbackModels(abortSignal);
+    if (fallbackModels.length > 0) {
+      this.cacheModels(fallbackModels);
+      return fallbackModels;
+    }
+    throw new ListFoundationModelsDeniedError;
+  }
   getClientConfig() {
     const base = {
       region: this.region,
@@ -51884,11 +51960,54 @@ class BedrockAPIClient {
     }
     return modelId;
   }
+  recordListInferenceProfilesDenial() {
+    if (this.listInferenceProfilesAvailable === false) {
+      return;
+    }
+    this.listInferenceProfilesFailureCount++;
+    if (this.listInferenceProfilesFailureCount >= BedrockAPIClient.LIST_INFERENCE_PROFILES_MAX_RETRIES) {
+      this.listInferenceProfilesAvailable = false;
+      this.listInferenceProfilesCooldownUntil = Date.now() + BedrockAPIClient.LIST_INFERENCE_PROFILES_COOLDOWN_MS;
+      logger.warn(`[Bedrock API Client] ListInferenceProfiles API denied after ${this.listInferenceProfilesFailureCount} attempts - entering ${BedrockAPIClient.LIST_INFERENCE_PROFILES_COOLDOWN_MS / (60 * 1000)}min cooldown. Using default Anthropic inference profiles.`);
+    } else {
+      logger.info(`[Bedrock API Client] ListInferenceProfiles API denied (attempt ${this.listInferenceProfilesFailureCount}/${BedrockAPIClient.LIST_INFERENCE_PROFILES_MAX_RETRIES}), will retry on next refresh`);
+    }
+  }
+  recordListInferenceProfilesSuccess() {
+    if (this.listInferenceProfilesAvailable !== true) {
+      logger.debug("[Bedrock API Client] ListInferenceProfiles API confirmed available");
+    }
+    this.listInferenceProfilesAvailable = true;
+    this.listInferenceProfilesFailureCount = 0;
+  }
   recreateClients() {
     this.bedrockClient = new import_client_bedrock.BedrockClient(this.getClientConfig());
     this.bedrockRuntimeClient = new import_client_bedrock_runtime.BedrockRuntimeClient(this.getClientConfig());
     this.inferenceProfileCache.clear();
     this.countTokensAvailable = undefined;
+    this.listInferenceProfilesAvailable = undefined;
+    this.listInferenceProfilesFailureCount = 0;
+    this.listInferenceProfilesCooldownUntil = 0;
+    this.listFoundationModelsDenied = false;
+    this.listFoundationModelsDenialCount = 0;
+    this.listFoundationModelsCooldownUntil = 0;
+    this.cachedModels = undefined;
+    this.cachedModelsAt = 0;
+  }
+  shouldSkipListInferenceProfiles() {
+    if (this.listInferenceProfilesAvailable !== false) {
+      return false;
+    }
+    const now = Date.now();
+    if (now < this.listInferenceProfilesCooldownUntil) {
+      const remainingMinutes = Math.ceil((this.listInferenceProfilesCooldownUntil - now) / (60 * 1000));
+      logger.trace(`[Bedrock API Client] Skipping ListInferenceProfiles (cooldown active, ${remainingMinutes}m remaining)`);
+      return true;
+    }
+    logger.info("[Bedrock API Client] ListInferenceProfiles cooldown expired, resetting for retry");
+    this.listInferenceProfilesAvailable = undefined;
+    this.listInferenceProfilesFailureCount = 0;
+    return false;
   }
   async testAccessViaConverse(modelId, resourceType, abortSignal) {
     try {
@@ -53090,6 +53209,7 @@ var BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
 class BedrockChatModelProvider {
   secrets;
   globalState;
+  static MODEL_CHANGE_ECHO_WINDOW_MS = 5000;
   _onDidChangeLanguageModelInformation = new vscode7.EventEmitter;
   onDidChangeLanguageModelChatInformation = this._onDidChangeLanguageModelInformation.event;
   chatEndpoints = [];
@@ -53098,6 +53218,7 @@ class BedrockChatModelProvider {
   lastKnownModels = [];
   lastThinkingBlock;
   streamProcessor;
+  suppressModelChangeUntil = 0;
   constructor(secrets, globalState) {
     this.secrets = secrets;
     this.globalState = globalState;
@@ -53123,6 +53244,7 @@ class BedrockChatModelProvider {
       endpointsCount: this.chatEndpoints.length,
       reason: reason ?? "unspecified"
     });
+    this.suppressModelChangeUntil = Date.now() + BedrockChatModelProvider.MODEL_CHANGE_ECHO_WINDOW_MS;
     this._onDidChangeLanguageModelInformation.fire();
   }
   async prepareLanguageModelChatInformation(options, token) {
@@ -53522,6 +53644,9 @@ class BedrockChatModelProvider {
       }
       return estimateTokens(text);
     }
+  }
+  shouldIgnoreModelChangeEcho() {
+    return Date.now() < this.suppressModelChangeUntil;
   }
   applyAdaptiveThinkingFields(requestInput, modelId, modelProfile, betaHeaders, thinkingEffort, thinkingDisplay) {
     const includeDisplay = Boolean(thinkingDisplay) && modelProfile.supportsThinkingDisplay;
@@ -54227,6 +54352,10 @@ function activate(context) {
       logger.debug("[Extension] Ignoring onDidChangeChatModels before initial fetch complete");
       return;
     }
+    if (provider.shouldIgnoreModelChangeEcho()) {
+      logger.debug("[Extension] Ignoring onDidChangeChatModels echo from self-initiated refresh");
+      return;
+    }
     if (lmRefreshHandle) {
       clearTimeout(lmRefreshHandle);
     }
@@ -54247,5 +54376,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=7E909B14DC8853E364756E2164756E21
+//# debugId=843EB26826C25B4064756E2164756E21
 //# sourceMappingURL=extension.js.map
