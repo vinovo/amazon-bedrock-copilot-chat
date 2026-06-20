@@ -4,6 +4,15 @@
 
 export interface ModelProfile {
   /**
+   * Whether the model should PREFER adaptive thinking (thinking.type: "adaptive") over manual
+   * budget-based thinking, even though manual mode still works.
+   * Claude Opus 4.6 and Sonnet 4.6 recommend adaptive thinking (manual budget_tokens is
+   * deprecated-but-functional for them). This differs from {@link supportsAdaptiveThinkingOnly},
+   * which means manual thinking returns a 400 error.
+   * Adaptive-only models implicitly prefer adaptive as well.
+   */
+  prefersAdaptiveThinking: boolean;
+  /**
    * Whether the model requires the interleaved-thinking beta header (Claude 4 models only)
    */
   requiresInterleavedThinkingHeader: boolean;
@@ -34,6 +43,13 @@ export interface ModelProfile {
    * Whether the model supports extended thinking (Claude Opus 4.6, Opus 4.5, Opus 4.1, Opus 4, Sonnet 4.6, Sonnet 4.5, Sonnet 4, Sonnet 3.7)
    */
   supportsThinking: boolean;
+  /**
+   * Whether the model supports the thinking `display` field ("summarized" | "omitted").
+   * "omitted" suppresses streamed thinking text (blocks come back empty but the encrypted
+   * signature is retained), reducing time-to-first-text-token. Supported by Claude extended
+   * thinking models.
+   */
+  supportsThinkingDisplay: boolean;
   /**
    * Whether the model supports the adaptive thinking / thinking effort parameter (Claude Opus 4.6, Opus 4.5, Sonnet 4.6)
    * Allows controlling token expenditure with "high", "medium", or "low" effort levels
@@ -68,12 +84,14 @@ export interface ModelTokenLimits {
 
 export function getModelProfile(modelId: string): ModelProfile {
   const defaultProfile: ModelProfile = {
+    prefersAdaptiveThinking: false,
     requiresInterleavedThinkingHeader: false,
     supports1MContext: false,
     supportsAdaptiveThinkingOnly: false,
     supportsCachingWithToolResults: false,
     supportsPromptCaching: false,
     supportsThinking: false,
+    supportsThinkingDisplay: false,
     supportsThinkingEffort: false,
     supportsToolChoice: false,
     supportsToolResultStatus: false,
@@ -104,12 +122,14 @@ export function getModelProfile(modelId: string): ModelProfile {
       // Nova does NOT support cachePoint after toolResult blocks
       if (modelId.includes("nova")) {
         return {
+          prefersAdaptiveThinking: false,
           requiresInterleavedThinkingHeader: false,
           supports1MContext: false,
           supportsAdaptiveThinkingOnly: false,
           supportsCachingWithToolResults: false,
           supportsPromptCaching: true,
           supportsThinking: false,
+          supportsThinkingDisplay: false,
           supportsThinkingEffort: false,
           supportsToolChoice: true,
           supportsToolResultStatus: false,
@@ -148,6 +168,19 @@ export function getModelProfile(modelId: string): ModelProfile {
       const supportsAdaptiveThinkingOnly =
         modelId.includes("opus-4-8") || modelId.includes("opus-4-7");
 
+      // Claude Opus 4.6 and Sonnet 4.6 recommend adaptive thinking. Manual budget-based thinking
+      // is deprecated-but-still-functional for them, so we treat adaptive as a *preference* rather
+      // than the hard requirement that `supportsAdaptiveThinkingOnly` represents. Adaptive-only
+      // models implicitly prefer adaptive too.
+      const prefersAdaptiveThinking =
+        supportsAdaptiveThinkingOnly ||
+        modelId.includes("opus-4-6") ||
+        modelId.includes("sonnet-4-6");
+
+      // The thinking `display` field ("summarized" | "omitted") is supported by Claude extended
+      // thinking models. "omitted" suppresses streamed thinking text for faster time-to-first-token.
+      const supportsThinkingDisplay = supportsThinking;
+
       // Adaptive thinking / thinking effort parameter is supported by Claude Opus 4.8, Opus 4.6,
       // Opus 4.5, Sonnet 4.6, Sonnet 4.5, and Haiku 4.5.
       // Allows controlling token expenditure with "high", "medium", or "low" effort levels.
@@ -162,12 +195,14 @@ export function getModelProfile(modelId: string): ModelProfile {
         modelId.includes("haiku-4.5");
 
       return {
+        prefersAdaptiveThinking,
         requiresInterleavedThinkingHeader,
         supports1MContext: supports1MContext(modelId),
         supportsAdaptiveThinkingOnly,
         supportsCachingWithToolResults,
         supportsPromptCaching: true,
         supportsThinking,
+        supportsThinkingDisplay,
         supportsThinkingEffort,
         supportsToolChoice: true,
         supportsToolResultStatus: true, // Claude models support status field in tool results
@@ -177,12 +212,14 @@ export function getModelProfile(modelId: string): ModelProfile {
     case "mistral": {
       // Mistral models require JSON format for tool results
       return {
+        prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
+        supportsThinkingDisplay: false,
         supportsThinkingEffort: false,
         supportsToolChoice: false,
         supportsToolResultStatus: false,
@@ -193,12 +230,14 @@ export function getModelProfile(modelId: string): ModelProfile {
     case "openai": {
       // OpenAI models support tool choice but not prompt caching
       return {
+        prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
+        supportsThinkingDisplay: false,
         supportsThinkingEffort: false,
         supportsToolChoice: true,
         supportsToolResultStatus: false,

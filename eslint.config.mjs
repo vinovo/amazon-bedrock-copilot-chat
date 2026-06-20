@@ -153,6 +153,14 @@ export default defineConfig([
     },
   },
   {
-    ignores: ["out", "dist", "node_modules", ".vscode-test", "**/vscode.d.ts"],
+    ignores: [
+      "out",
+      "dist",
+      "node_modules",
+      ".vscode-test",
+      "**/vscode.d.ts",
+      // Vendored verbatim from microsoft/vscode (proposed API surface); not our code to lint.
+      "**/vscode.proposed.*.d.ts",
+    ],
   },
 ]);
