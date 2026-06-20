@@ -31,20 +31,26 @@ export class ToolBuffer {
     const tool = this.tools.get(index);
     const inputStr = this.inputBuffers.get(index);
 
-    if (!tool || !inputStr) {
+    // If the tool was never started there is nothing to finalize.
+    if (!tool) {
       return undefined;
     }
 
+    // A zero-argument tool call (e.g. an MCP "whoami" tool) streams a tool_use block
+    // with no input deltas, leaving the buffer empty. Treat that as an empty-object input
+    // rather than dropping the (valid) tool call. Only genuinely malformed JSON is skipped.
+    const rawInput = inputStr && inputStr.trim().length > 0 ? inputStr : "{}";
+
     try {
-      tool.input = JSON.parse(inputStr) as JsonValue;
+      tool.input = JSON.parse(rawInput) as JsonValue;
     } catch {
       logger.warn("[ToolBuffer] Failed to parse tool input JSON, skipping tool call", {
-        inputLength: inputStr.length,
+        inputLength: rawInput.length,
         toolId: tool.id,
         toolName: tool.name,
       });
       logger.trace("[ToolBuffer] Raw input preview for failed tool parse", {
-        rawInputPreview: inputStr.slice(0, 200).replaceAll("\n", String.raw`\n`),
+        rawInputPreview: rawInput.slice(0, 200).replaceAll("\n", String.raw`\n`),
         toolId: tool.id,
         toolName: tool.name,
       });
@@ -87,12 +93,15 @@ export class ToolBuffer {
     const tool = this.tools.get(index);
     const inputStr = this.inputBuffers.get(index);
 
-    if (!tool || !inputStr) {
+    if (!tool) {
       return undefined;
     }
 
+    // An empty buffer represents a complete zero-argument call ({}), not incomplete JSON.
+    const rawInput = inputStr && inputStr.trim().length > 0 ? inputStr : "{}";
+
     try {
-      const parsed = JSON.parse(inputStr) as JsonValue;
+      const parsed = JSON.parse(rawInput) as JsonValue;
       return {
         id: tool.id,
         input: parsed,

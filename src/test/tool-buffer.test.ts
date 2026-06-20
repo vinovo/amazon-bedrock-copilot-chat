@@ -39,12 +39,25 @@ suite("ToolBuffer", () => {
       assert.equal(result, undefined);
     });
 
-    test("finalizeTool returns undefined when inputBuffer is empty string", () => {
+    test("finalizeTool treats an empty input buffer as a zero-argument call ({})", () => {
       const buf = new ToolBuffer();
       buf.startTool(0, "call-1", "my_tool");
-      // inputBuffer is "" — JSON.parse("") throws, so finalize should return undefined
+      // No input deltas streamed (e.g. an MCP "whoami" tool that takes no args).
+      // The tool call is valid and must be emitted with an empty-object input.
       const result = buf.finalizeTool(0);
-      assert.equal(result, undefined);
+      assert.ok(result);
+      assert.equal(result.id, "call-1");
+      assert.equal(result.name, "my_tool");
+      assert.deepStrictEqual(result.input, {});
+    });
+
+    test("finalizeTool treats a whitespace-only input buffer as a zero-argument call ({})", () => {
+      const buf = new ToolBuffer();
+      buf.startTool(0, "call-1", "my_tool");
+      buf.appendInput(0, "   ");
+      const result = buf.finalizeTool(0);
+      assert.ok(result);
+      assert.deepStrictEqual(result.input, {});
     });
 
     test("finalizeTool clears internal state on success", () => {
@@ -188,6 +201,15 @@ suite("ToolBuffer", () => {
       const buf = new ToolBuffer();
       const result = buf.tryGetValidTool(42);
       assert.equal(result, undefined);
+    });
+
+    test("returns a zero-argument call ({}) for a started tool with no streamed input", () => {
+      const buf = new ToolBuffer();
+      buf.startTool(0, "call-1", "my_tool");
+      const result = buf.tryGetValidTool(0);
+      assert.ok(result);
+      assert.equal(result.name, "my_tool");
+      assert.deepStrictEqual(result.input, {});
     });
   });
 

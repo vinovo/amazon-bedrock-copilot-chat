@@ -52537,19 +52537,20 @@ class ToolBuffer {
   finalizeTool(index) {
     const tool = this.tools.get(index);
     const inputStr = this.inputBuffers.get(index);
-    if (!tool || !inputStr) {
+    if (!tool) {
       return;
     }
+    const rawInput = inputStr && inputStr.trim().length > 0 ? inputStr : "{}";
     try {
-      tool.input = JSON.parse(inputStr);
+      tool.input = JSON.parse(rawInput);
     } catch {
       logger.warn("[ToolBuffer] Failed to parse tool input JSON, skipping tool call", {
-        inputLength: inputStr.length,
+        inputLength: rawInput.length,
         toolId: tool.id,
         toolName: tool.name
       });
       logger.trace("[ToolBuffer] Raw input preview for failed tool parse", {
-        rawInputPreview: inputStr.slice(0, 200).replaceAll(`
+        rawInputPreview: rawInput.slice(0, 200).replaceAll(`
 `, String.raw`\n`),
         toolId: tool.id,
         toolName: tool.name
@@ -52575,11 +52576,12 @@ class ToolBuffer {
   tryGetValidTool(index) {
     const tool = this.tools.get(index);
     const inputStr = this.inputBuffers.get(index);
-    if (!tool || !inputStr) {
+    if (!tool) {
       return;
     }
+    const rawInput = inputStr && inputStr.trim().length > 0 ? inputStr : "{}";
     try {
-      const parsed = JSON.parse(inputStr);
+      const parsed = JSON.parse(rawInput);
       return {
         id: tool.id,
         input: parsed,
@@ -54245,5 +54247,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=BC43697AB6B391A064756E2164756E21
+//# debugId=7E909B14DC8853E364756E2164756E21
 //# sourceMappingURL=extension.js.map
