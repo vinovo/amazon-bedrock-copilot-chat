@@ -26,10 +26,19 @@ export interface BedrockSettings {
   region: string;
   thinking: {
     budgetTokens: number;
+    display: ThinkingDisplay;
     effort: ThinkingEffort;
     enabled: boolean;
   };
 }
+
+/**
+ * Controls how Claude extended-thinking content is returned.
+ * - "summarized": stream summarized thinking text (default)
+ * - "omitted": suppress streamed thinking text (blocks come back empty; encrypted signature is
+ *   retained for multi-turn continuity). Reduces time-to-first-text-token; still billed in full.
+ */
+export type ThinkingDisplay = "omitted" | "summarized";
 
 /**
  * Thinking effort level for Claude Opus 4.5 and Sonnet 4.6.
@@ -113,6 +122,14 @@ export async function getBedrockSettings(globalState: vscode.Memento): Promise<B
       ? (rawEffort as ThinkingEffort)
       : "high";
 
+  // Read thinking display setting ("summarized" | "omitted"). Default to "summarized".
+  const validDisplayValues: ThinkingDisplay[] = ["omitted", "summarized"];
+  const rawDisplay = config.get<string>("thinking.display");
+  const thinkingDisplay: ThinkingDisplay =
+    rawDisplay && validDisplayValues.includes(rawDisplay as ThinkingDisplay)
+      ? (rawDisplay as ThinkingDisplay)
+      : "summarized";
+
   return {
     context1M: {
       enabled: context1MEnabled,
@@ -128,6 +145,7 @@ export async function getBedrockSettings(globalState: vscode.Memento): Promise<B
     region,
     thinking: {
       budgetTokens: Math.max(1024, thinkingBudgetTokens), // Ensure minimum 1024
+      display: thinkingDisplay,
       effort: thinkingEffort,
       enabled: thinkingEnabled,
     },

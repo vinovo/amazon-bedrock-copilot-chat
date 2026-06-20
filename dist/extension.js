@@ -50992,6 +50992,9 @@ async function getBedrockSettings(globalState) {
   const validEffortValues = ["high", "low", "medium"];
   const rawEffort = config.get("thinking.effort");
   const thinkingEffort = rawEffort && validEffortValues.includes(rawEffort) ? rawEffort : "high";
+  const validDisplayValues = ["omitted", "summarized"];
+  const rawDisplay = config.get("thinking.display");
+  const thinkingDisplay = rawDisplay && validDisplayValues.includes(rawDisplay) ? rawDisplay : "summarized";
   return {
     context1M: {
       enabled: context1MEnabled
@@ -51007,6 +51010,7 @@ async function getBedrockSettings(globalState) {
     region,
     thinking: {
       budgetTokens: Math.max(1024, thinkingBudgetTokens),
+      display: thinkingDisplay,
       effort: thinkingEffort,
       enabled: thinkingEnabled
     }
@@ -51939,12 +51943,14 @@ var vscode4 = __toESM(require("vscode"));
 // src/profiles.ts
 function getModelProfile(modelId) {
   const defaultProfile = {
+    prefersAdaptiveThinking: false,
     requiresInterleavedThinkingHeader: false,
     supports1MContext: false,
     supportsAdaptiveThinkingOnly: false,
     supportsCachingWithToolResults: false,
     supportsPromptCaching: false,
     supportsThinking: false,
+    supportsThinkingDisplay: false,
     supportsThinkingEffort: false,
     supportsToolChoice: false,
     supportsToolResultStatus: false,
@@ -51965,12 +51971,14 @@ function getModelProfile(modelId) {
     case "amazon": {
       if (modelId.includes("nova")) {
         return {
+          prefersAdaptiveThinking: false,
           requiresInterleavedThinkingHeader: false,
           supports1MContext: false,
           supportsAdaptiveThinkingOnly: false,
           supportsCachingWithToolResults: false,
           supportsPromptCaching: true,
           supportsThinking: false,
+          supportsThinkingDisplay: false,
           supportsThinkingEffort: false,
           supportsToolChoice: true,
           supportsToolResultStatus: false,
@@ -51984,14 +51992,18 @@ function getModelProfile(modelId) {
       const requiresInterleavedThinkingHeader = modelId.includes("opus-4") || modelId.includes("sonnet-4") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
       const supportsCachingWithToolResults = !supportsThinking;
       const supportsAdaptiveThinkingOnly = modelId.includes("opus-4-8") || modelId.includes("opus-4-7");
+      const prefersAdaptiveThinking = supportsAdaptiveThinkingOnly || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6");
+      const supportsThinkingDisplay = supportsThinking;
       const supportsThinkingEffort = modelId.includes("opus-4-8") || modelId.includes("opus-4-6") || modelId.includes("opus-4-5") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-4-5") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
       return {
+        prefersAdaptiveThinking,
         requiresInterleavedThinkingHeader,
         supports1MContext: supports1MContext(modelId),
         supportsAdaptiveThinkingOnly,
         supportsCachingWithToolResults,
         supportsPromptCaching: true,
         supportsThinking,
+        supportsThinkingDisplay,
         supportsThinkingEffort,
         supportsToolChoice: true,
         supportsToolResultStatus: true,
@@ -52000,12 +52012,14 @@ function getModelProfile(modelId) {
     }
     case "mistral": {
       return {
+        prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
+        supportsThinkingDisplay: false,
         supportsThinkingEffort: false,
         supportsToolChoice: false,
         supportsToolResultStatus: false,
@@ -52014,12 +52028,14 @@ function getModelProfile(modelId) {
     }
     case "openai": {
       return {
+        prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
+        supportsThinkingDisplay: false,
         supportsThinkingEffort: false,
         supportsToolChoice: true,
         supportsToolResultStatus: false,
@@ -53181,6 +53197,7 @@ class BedrockChatModelProvider {
                 toolCalling: true
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
+              configurationSchema: this.buildThinkingConfigurationSchema(modelIdToUse),
               family: "bedrock",
               id: modelIdToUse,
               isUserSelectable: true,
@@ -53211,6 +53228,7 @@ class BedrockChatModelProvider {
                 toolCalling: true
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
+              configurationSchema: this.buildThinkingConfigurationSchema(modelIdForLimits),
               family: "bedrock",
               id: profile.modelArn,
               isUserSelectable: true,
@@ -53381,17 +53399,18 @@ class BedrockChatModelProvider {
       const settings = await getBedrockSettings(this.globalState);
       const modelProfile = getModelProfile(baseModelId);
       const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
+      this.applyModelConfigurationOverrides(settings, options.modelConfiguration);
       const maxTokensForRequest = typeof options.modelOptions?.max_tokens === "number" ? options.modelOptions.max_tokens : modelLimits.maxOutputTokens;
       const { budgetTokens, extendedThinkingEnabled: initialThinkingEnabled } = this.calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, settings.thinking.enabled);
       let extendedThinkingEnabled = initialThinkingEnabled;
       if (extendedThinkingEnabled) {
         const assistantMsgCount = messages.filter((m) => m.role === vscode7.LanguageModelChatMessageRole.Assistant).length;
         if (assistantMsgCount > 1) {
-          logger.warn("[Bedrock Model Provider] Disabling extended thinking - multiple assistant messages in history require individual thinking blocks", { assistantMsgCount });
+          logger.debug("[Bedrock Model Provider] Disabling extended thinking - multiple assistant messages in history require individual thinking blocks", { assistantMsgCount });
           extendedThinkingEnabled = false;
           this.lastThinkingBlock = undefined;
         } else if (assistantMsgCount === 1 && !this.lastThinkingBlock?.signature) {
-          logger.warn("[Bedrock Model Provider] Disabling extended thinking - no stored thinking block available for previous assistant message");
+          logger.debug("[Bedrock Model Provider] Disabling extended thinking - no stored thinking block available for previous assistant message");
           extendedThinkingEnabled = false;
         }
       }
@@ -53408,7 +53427,7 @@ class BedrockChatModelProvider {
       }
       const thinkingEffortEnabled = modelProfile.supportsThinkingEffort;
       const betaHeaders = this.buildBetaHeaders(modelProfile, extendedThinkingEnabled, settings.context1M.enabled, thinkingEffortEnabled);
-      const requestInput = this.buildRequestInput(model, modelProfile, converted, options, toolConfig, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffortEnabled ? settings.thinking.effort : undefined);
+      const requestInput = this.buildRequestInput(model, modelProfile, converted, options, toolConfig, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffortEnabled ? settings.thinking.effort : undefined, modelProfile.supportsThinkingDisplay ? settings.thinking.display : undefined);
       this.logRequestDetails(requestInput);
       await this.validateTokenCount(model, requestInput, token);
       await this.processResponseStream(requestInput, trackingProgress, extendedThinkingEnabled, token);
@@ -53502,24 +53521,46 @@ class BedrockChatModelProvider {
       return estimateTokens(text);
     }
   }
-  applyAdaptiveThinkingFields(requestInput, modelId, modelProfile, betaHeaders, thinkingEffort) {
+  applyAdaptiveThinkingFields(requestInput, modelId, modelProfile, betaHeaders, thinkingEffort, thinkingDisplay) {
+    const includeDisplay = Boolean(thinkingDisplay) && modelProfile.supportsThinkingDisplay;
     requestInput.additionalModelRequestFields = {
-      thinking: { type: "adaptive" },
+      thinking: {
+        type: "adaptive",
+        ...includeDisplay ? { display: thinkingDisplay } : {}
+      },
       ...betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {},
       ...thinkingEffort && modelProfile.supportsThinkingEffort ? { output_config: { effort: thinkingEffort } } : {}
     };
     logger.debug("[Bedrock Model Provider] Adaptive thinking enabled", {
       anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
       modelId,
+      thinkingDisplay: includeDisplay ? thinkingDisplay : undefined,
       thinkingEffort: thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined
     });
   }
-  applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort) {
+  applyModelConfigurationOverrides(settings, modelConfiguration) {
+    if (!modelConfiguration) {
+      return;
+    }
+    if (typeof modelConfiguration.thinkingEnabled === "boolean") {
+      settings.thinking.enabled = modelConfiguration.thinkingEnabled;
+    }
+    const effort = modelConfiguration.thinkingEffort;
+    if (effort === "high" || effort === "medium" || effort === "low") {
+      settings.thinking.effort = effort;
+    }
+    const display = modelConfiguration.thinkingDisplay;
+    if (display === "summarized" || display === "omitted") {
+      settings.thinking.display = display;
+    }
+  }
+  applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
     requestInput.inferenceConfig.temperature = 1;
     requestInput.additionalModelRequestFields = {
       thinking: {
         budget_tokens: budgetTokens,
-        type: "enabled"
+        type: "enabled",
+        ...thinkingDisplay ? { display: thinkingDisplay } : {}
       },
       ...betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {},
       ...thinkingEffort ? { output_config: { effort: thinkingEffort } } : {}
@@ -53531,6 +53572,7 @@ class BedrockChatModelProvider {
       modelId,
       supports1MContext: betaHeaders.includes("context-1m-2025-08-07"),
       temperature: 1,
+      thinkingDisplay: thinkingDisplay ?? "(not applicable)",
       thinkingEffort: thinkingEffort ?? "(not applicable)"
     });
   }
@@ -53623,11 +53665,12 @@ class BedrockChatModelProvider {
     }
     return candidates;
   }
-  buildRequestInput(model, modelProfile, converted, options, toolConfig, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort) {
+  buildRequestInput(model, modelProfile, converted, options, toolConfig, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
+    const usesAdaptiveThinking = modelProfile.supportsAdaptiveThinkingOnly || modelProfile.prefersAdaptiveThinking && extendedThinkingEnabled;
     const requestInput = {
       inferenceConfig: {
         maxTokens: Math.min(typeof options.modelOptions?.max_tokens === "number" ? options.modelOptions.max_tokens : model.maxOutputTokens, model.maxOutputTokens),
-        ...!modelProfile.supportsAdaptiveThinkingOnly && {
+        ...!usesAdaptiveThinking && {
           temperature: typeof options.modelOptions?.temperature === "number" ? options.modelOptions?.temperature : 0.7
         }
       },
@@ -53637,7 +53680,7 @@ class BedrockChatModelProvider {
     if (converted.system.length > 0) {
       requestInput.system = converted.system;
     }
-    if (options.modelOptions && !modelProfile.supportsAdaptiveThinkingOnly) {
+    if (options.modelOptions && !usesAdaptiveThinking) {
       const mo = options.modelOptions;
       if (typeof mo.top_p === "number") {
         requestInput.inferenceConfig.topP = mo.top_p;
@@ -53651,12 +53694,54 @@ class BedrockChatModelProvider {
     if (toolConfig) {
       requestInput.toolConfig = toolConfig;
     }
-    this.configureAdditionalModelFields(requestInput, model.id, modelProfile, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort);
+    this.configureAdditionalModelFields(requestInput, model.id, modelProfile, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay);
     return requestInput;
   }
   buildSentinelModelList(error) {
     const sentinel = makeBedrockErrorSentinel(error);
     return this.lastKnownModels.length > 0 ? [...this.lastKnownModels, sentinel] : [sentinel];
+  }
+  buildThinkingConfigurationSchema(modelId) {
+    const profile = getModelProfile(modelId);
+    if (!profile.supportsThinking) {
+      return;
+    }
+    const thinkingEnabled = {
+      default: true,
+      description: "Enable extended thinking for this model.",
+      type: "boolean"
+    };
+    const thinkingEffort = profile.supportsThinkingEffort ? {
+      default: "high",
+      description: "Thinking effort level.",
+      enum: ["high", "medium", "low"],
+      enumDescriptions: [
+        "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
+        "Balanced approach with moderate token savings.",
+        "Most efficient — significant token savings with some capability reduction."
+      ],
+      enumItemLabels: ["High", "Medium", "Low"],
+      group: "navigation",
+      type: "string"
+    } : undefined;
+    const thinkingDisplay = profile.supportsThinkingDisplay ? {
+      default: "summarized",
+      description: "How thinking content is returned.",
+      enum: ["summarized", "omitted"],
+      enumDescriptions: [
+        "Stream summarized thinking text (default).",
+        "Suppress streamed thinking text for faster time-to-first-token (still billed in full)."
+      ],
+      enumItemLabels: ["Summarized", "Omitted"],
+      type: "string"
+    } : undefined;
+    return {
+      properties: {
+        thinkingEnabled,
+        ...thinkingEffort ? { thinkingEffort } : {},
+        ...thinkingDisplay ? { thinkingDisplay } : {}
+      }
+    };
   }
   calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, thinkingEnabled) {
     const baseBudget = 16000;
@@ -53666,12 +53751,12 @@ class BedrockChatModelProvider {
     const extendedThinkingEnabled = thinkingEnabled && modelProfile.supportsThinking && budgetTokens >= 1024;
     return { budgetTokens, extendedThinkingEnabled };
   }
-  configureAdditionalModelFields(requestInput, modelId, modelProfile, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort) {
+  configureAdditionalModelFields(requestInput, modelId, modelProfile, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
     if (extendedThinkingEnabled) {
-      if (modelProfile.supportsAdaptiveThinkingOnly) {
-        this.applyAdaptiveThinkingFields(requestInput, modelId, modelProfile, betaHeaders, thinkingEffort);
+      if (modelProfile.supportsAdaptiveThinkingOnly || modelProfile.prefersAdaptiveThinking) {
+        this.applyAdaptiveThinkingFields(requestInput, modelId, modelProfile, betaHeaders, thinkingEffort, thinkingDisplay);
       } else {
-        this.applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort);
+        this.applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay);
       }
       return;
     }
@@ -54160,5 +54245,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=8A2A14879B3EDAD864756E2164756E21
+//# debugId=BC43697AB6B391A064756E2164756E21
 //# sourceMappingURL=extension.js.map

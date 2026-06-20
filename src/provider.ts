@@ -41,11 +41,22 @@ import { validateBedrockMessages } from "./validation";
  *   so users cannot select/pin them.
  * - `category` groups models under a named section in the picker. Without it, our models
  *   fall under "Other Models" (collapsed, ordered last).
+ *
+ * `configurationSchema` and `isUserSelectable` are part of the proposed `chatProvider` API and
+ * are declared on the base `LanguageModelChatInformation` once `vscode.proposed.chatProvider.d.ts`
+ * is vendored; we re-declare `isUserSelectable` here only to keep this type self-documenting.
+ * `category` is NOT part of any proposal — it is duck-typed and read by the picker at runtime.
  */
 type BedrockLanguageModelChatInformation = LanguageModelChatInformation & {
   readonly category?: { label: string; order: number };
   readonly isUserSelectable?: boolean;
 };
+
+/**
+ * Thinking display mode passed via `thinking.display` for Claude extended thinking.
+ * "omitted" suppresses streamed thinking text (faster time-to-first-token).
+ */
+type ThinkingDisplay = "omitted" | "summarized";
 
 /**
  * Effort level passed via `output_config.effort` for adaptive thinking and Claude
@@ -292,6 +303,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
                 toolCalling: true,
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
+              configurationSchema: this.buildThinkingConfigurationSchema(modelIdToUse),
               family: "bedrock",
               id: modelIdToUse,
               isUserSelectable: true,
@@ -334,6 +346,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
                 toolCalling: true,
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
+              configurationSchema: this.buildThinkingConfigurationSchema(modelIdForLimits),
               family: "bedrock",
               id: profile.modelArn,
               isUserSelectable: true,
@@ -598,6 +611,11 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       const modelProfile = getModelProfile(baseModelId);
       const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
 
+      // Per-model picker configuration (proposed `chatProvider` API) takes precedence over the
+      // workspace `bedrock.thinking.*` fallback settings. Whatever the user selects in the model
+      // picker arrives on `options.modelConfiguration`, keyed to our `configurationSchema`.
+      this.applyModelConfigurationOverrides(settings, options.modelConfiguration);
+
       // Calculate thinking configuration
       // Use model's maxOutputTokens as default when VSCode doesn't provide max_tokens.
       // This prevents thinking budget starvation that causes MAX_TOKENS errors
@@ -630,7 +648,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         if (assistantMsgCount > 1) {
           // Can't inject thinking blocks for multiple previous assistant messages
           // Each assistant message needs its own unique thinking block, but we only have one stored
-          logger.warn(
+          logger.debug(
             "[Bedrock Model Provider] Disabling extended thinking - multiple assistant messages in history require individual thinking blocks",
             { assistantMsgCount },
           );
@@ -641,7 +659,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           this.lastThinkingBlock = undefined;
         } else if (assistantMsgCount === 1 && !this.lastThinkingBlock?.signature) {
           // Have one assistant message but no thinking block to inject
-          logger.warn(
+          logger.debug(
             "[Bedrock Model Provider] Disabling extended thinking - no stored thinking block available for previous assistant message",
           );
           extendedThinkingEnabled = false;
@@ -694,6 +712,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         budgetTokens,
         betaHeaders,
         thinkingEffortEnabled ? settings.thinking.effort : undefined,
+        modelProfile.supportsThinkingDisplay ? settings.thinking.display : undefined,
       );
 
       // Log request details
@@ -881,9 +900,14 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     modelProfile: ReturnType<typeof getModelProfile>,
     betaHeaders: string[],
     thinkingEffort?: ThinkingEffort,
+    thinkingDisplay?: ThinkingDisplay,
   ): void {
+    const includeDisplay = Boolean(thinkingDisplay) && modelProfile.supportsThinkingDisplay;
     requestInput.additionalModelRequestFields = {
-      thinking: { type: "adaptive" },
+      thinking: {
+        type: "adaptive",
+        ...(includeDisplay ? { display: thinkingDisplay } : {}),
+      },
       ...(betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}),
       ...(thinkingEffort && modelProfile.supportsThinkingEffort
         ? { output_config: { effort: thinkingEffort } }
@@ -892,9 +916,38 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     logger.debug("[Bedrock Model Provider] Adaptive thinking enabled", {
       anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
       modelId,
+      thinkingDisplay: includeDisplay ? thinkingDisplay : undefined,
       thinkingEffort:
         thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined,
     });
+  }
+
+  /**
+   * Apply per-model picker configuration (proposed `chatProvider` API) on top of the workspace
+   * `bedrock.thinking.*` fallback settings. Values present in `modelConfiguration` win; absent
+   * values leave the fallback intact. Unknown/invalid values are ignored.
+   */
+  private applyModelConfigurationOverrides(
+    settings: Awaited<ReturnType<typeof getBedrockSettings>>,
+    modelConfiguration: Readonly<Record<string, unknown>> | undefined,
+  ): void {
+    if (!modelConfiguration) {
+      return;
+    }
+
+    if (typeof modelConfiguration.thinkingEnabled === "boolean") {
+      settings.thinking.enabled = modelConfiguration.thinkingEnabled;
+    }
+
+    const effort = modelConfiguration.thinkingEffort;
+    if (effort === "high" || effort === "medium" || effort === "low") {
+      settings.thinking.effort = effort;
+    }
+
+    const display = modelConfiguration.thinkingDisplay;
+    if (display === "summarized" || display === "omitted") {
+      settings.thinking.display = display;
+    }
   }
 
   /**
@@ -908,12 +961,14 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     budgetTokens: number,
     betaHeaders: string[],
     thinkingEffort?: ThinkingEffort,
+    thinkingDisplay?: ThinkingDisplay,
   ): void {
     requestInput.inferenceConfig!.temperature = 1;
     requestInput.additionalModelRequestFields = {
       thinking: {
         budget_tokens: budgetTokens,
         type: "enabled",
+        ...(thinkingDisplay ? { display: thinkingDisplay } : {}),
       },
       ...(betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}),
       // Add thinking effort for Claude Opus 4.5 and Sonnet 4.6 (controls token expenditure)
@@ -926,6 +981,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       modelId,
       supports1MContext: betaHeaders.includes("context-1m-2025-08-07"),
       temperature: 1,
+      thinkingDisplay: thinkingDisplay ?? "(not applicable)",
       thinkingEffort: thinkingEffort ?? "(not applicable)",
     });
   }
@@ -1094,7 +1150,16 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     budgetTokens: number,
     betaHeaders: string[],
     thinkingEffort?: ThinkingEffort,
+    thinkingDisplay?: ThinkingDisplay,
   ): ConverseStreamCommandInput {
+    // When adaptive thinking is active, Anthropic disallows temperature/top_p/top_k.
+    // - Adaptive-only models (Opus 4.8/4.7) never accept them.
+    // - Adaptive-preferring models (Opus 4.6 / Sonnet 4.6) only forbid them while extended
+    //   thinking is enabled; without thinking they behave like normal sampling models.
+    const usesAdaptiveThinking =
+      modelProfile.supportsAdaptiveThinkingOnly ||
+      (modelProfile.prefersAdaptiveThinking && extendedThinkingEnabled);
+
     const requestInput: ConverseStreamCommandInput = {
       inferenceConfig: {
         maxTokens: Math.min(
@@ -1103,8 +1168,8 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
             : model.maxOutputTokens,
           model.maxOutputTokens,
         ),
-        // Opus 4.8 / 4.7 do not support temperature/top_p/top_k — omit entirely for adaptive-only models
-        ...(!modelProfile.supportsAdaptiveThinkingOnly && {
+        // Adaptive thinking does not support temperature/top_p/top_k — omit entirely.
+        ...(!usesAdaptiveThinking && {
           temperature:
             typeof options.modelOptions?.temperature === "number"
               ? options.modelOptions?.temperature
@@ -1119,7 +1184,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       requestInput.system = converted.system;
     }
 
-    if (options.modelOptions && !modelProfile.supportsAdaptiveThinkingOnly) {
+    if (options.modelOptions && !usesAdaptiveThinking) {
       const mo = options.modelOptions;
       if (typeof mo.top_p === "number") {
         requestInput.inferenceConfig!.topP = mo.top_p;
@@ -1144,6 +1209,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       budgetTokens,
       betaHeaders,
       thinkingEffort,
+      thinkingDisplay,
     );
 
     return requestInput;
@@ -1159,6 +1225,80 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   private buildSentinelModelList(error: unknown): BedrockLanguageModelChatInformation[] {
     const sentinel = makeBedrockErrorSentinel(error);
     return this.lastKnownModels.length > 0 ? [...this.lastKnownModels, sentinel] : [sentinel];
+  }
+
+  /**
+   * Build the per-model `configurationSchema` (proposed `chatProvider` API) that drives the
+   * model picker's thinking controls. Returns `undefined` for models without any thinking
+   * capability so no picker UI is shown for them.
+   *
+   * The schema is keyed off the model's capability profile:
+   * - `thinkingEnabled` (boolean) — toggle extended thinking, when the model supports thinking.
+   * - `thinkingEffort` (enum, `group: "navigation"`) — effort level, surfaced as the dedicated
+   *   "Thinking Effort" picker button for effort-capable models.
+   * - `thinkingDisplay` (enum) — summarized vs omitted thinking output, for display-capable models.
+   *
+   * Whatever the user picks arrives back on `options.modelConfiguration` and takes precedence
+   * over the workspace `bedrock.thinking.*` fallback settings.
+   */
+  private buildThinkingConfigurationSchema(
+    modelId: string,
+  ): BedrockLanguageModelChatInformation["configurationSchema"] {
+    const profile = getModelProfile(modelId);
+
+    if (!profile.supportsThinking) {
+      return undefined;
+    }
+
+    type SchemaProperties = NonNullable<
+      BedrockLanguageModelChatInformation["configurationSchema"]
+    >["properties"];
+    type SchemaProperty = NonNullable<SchemaProperties>[string];
+
+    const thinkingEnabled: SchemaProperty = {
+      default: true,
+      description: "Enable extended thinking for this model.",
+      type: "boolean",
+    };
+
+    const thinkingEffort: SchemaProperty | undefined = profile.supportsThinkingEffort
+      ? {
+          default: "high",
+          description: "Thinking effort level.",
+          enum: ["high", "medium", "low"],
+          enumDescriptions: [
+            "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
+            "Balanced approach with moderate token savings.",
+            "Most efficient — significant token savings with some capability reduction.",
+          ],
+          enumItemLabels: ["High", "Medium", "Low"],
+          // `group: "navigation"` surfaces this as the dedicated picker button (UBB mode).
+          group: "navigation",
+          type: "string",
+        }
+      : undefined;
+
+    const thinkingDisplay: SchemaProperty | undefined = profile.supportsThinkingDisplay
+      ? {
+          default: "summarized",
+          description: "How thinking content is returned.",
+          enum: ["summarized", "omitted"],
+          enumDescriptions: [
+            "Stream summarized thinking text (default).",
+            "Suppress streamed thinking text for faster time-to-first-token (still billed in full).",
+          ],
+          enumItemLabels: ["Summarized", "Omitted"],
+          type: "string",
+        }
+      : undefined;
+
+    return {
+      properties: {
+        thinkingEnabled,
+        ...(thinkingEffort ? { thinkingEffort } : {}),
+        ...(thinkingDisplay ? { thinkingDisplay } : {}),
+      },
+    };
   }
 
   /**
@@ -1198,15 +1338,19 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     budgetTokens: number,
     betaHeaders: string[],
     thinkingEffort?: ThinkingEffort,
+    thinkingDisplay?: ThinkingDisplay,
   ): void {
     if (extendedThinkingEnabled) {
-      if (modelProfile.supportsAdaptiveThinkingOnly) {
+      // Route to adaptive thinking for models that require it (Opus 4.8/4.7) AND models that
+      // merely prefer it (Opus 4.6 / Sonnet 4.6, where manual budget thinking is deprecated).
+      if (modelProfile.supportsAdaptiveThinkingOnly || modelProfile.prefersAdaptiveThinking) {
         this.applyAdaptiveThinkingFields(
           requestInput,
           modelId,
           modelProfile,
           betaHeaders,
           thinkingEffort,
+          thinkingDisplay,
         );
       } else {
         this.applyStandardExtendedThinkingFields(
@@ -1215,6 +1359,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           budgetTokens,
           betaHeaders,
           thinkingEffort,
+          thinkingDisplay,
         );
       }
       return;

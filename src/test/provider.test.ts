@@ -471,6 +471,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     test("convertTools creates Bedrock tool configuration", () => {
       const out = convertTools(
         {
+          requestInitiator: "",
           toolMode: vscode.LanguageModelChatToolMode.Auto,
           tools: [
             {
@@ -509,6 +510,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
       // Test with Anthropic model (supports tool choice)
       const out = convertTools(
         {
+          requestInitiator: "",
           toolMode: vscode.LanguageModelChatToolMode.Required,
           tools: [
             {
@@ -529,6 +531,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     test("convertTools handles Auto tool mode", () => {
       const out = convertTools(
         {
+          requestInitiator: "",
           toolMode: vscode.LanguageModelChatToolMode.Auto,
           tools: [
             {
@@ -549,6 +552,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     test("convertTools returns undefined when no tools provided", () => {
       const out = convertTools(
         {
+          requestInitiator: "",
           toolMode: vscode.LanguageModelChatToolMode.Auto,
           tools: [],
         } as vscode.ProvideLanguageModelChatResponseOptions,
