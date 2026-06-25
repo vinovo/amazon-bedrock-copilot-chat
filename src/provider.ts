@@ -990,13 +990,12 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       settings.thinking.display = display;
     }
 
-    // Context-length picker: "1m" enables the 1M context window, "default" forces the standard
-    // 200K window for this request. Absent / unknown values leave the workspace setting intact.
+    // Context-size picker (`group: "tokens"`): the value is the selected total context-window
+    // token count. >= 1M enables the 1M context window; a smaller value (e.g. 200K) forces the
+    // standard window for this request. Absent / unknown values leave the workspace setting intact.
     const contextLength = modelConfiguration.contextLength;
-    if (contextLength === "1m") {
-      settings.context1M.enabled = true;
-    } else if (contextLength === "default") {
-      settings.context1M.enabled = false;
+    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
+      settings.context1M.enabled = contextLength >= 1_000_000;
     }
   }
 
@@ -1197,8 +1196,9 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
    * - `thinkingEffort` (enum, `group: "navigation"`) — effort level, surfaced as the dedicated
    *   "Thinking Effort" picker button for effort-capable models.
    * - `thinkingDisplay` (enum) — summarized vs omitted thinking output, for display-capable models.
-   * - `contextLength` (enum, `group: "navigation"`) — context-window size, surfaced as the
-   *   dedicated context-length picker button for models that support the 1M context window.
+   * - `contextLength` (enum, `group: "tokens"`) — context-window size, surfaced as the dedicated
+   *   "Context Size" picker button for models whose 1M context window is *toggleable* (Opus 4.6/4.7/4.8,
+   *   Sonnet 4.x). Models without a 200K↔1M choice (e.g. Opus 4.5, Haiku) show no picker.
    *
    * Whatever the user picks arrives back on `options.modelConfiguration` and takes precedence
    * over the workspace `bedrock.*` fallback settings.
@@ -1208,8 +1208,16 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   ): BedrockLanguageModelChatInformation["configurationSchema"] {
     const profile = getModelProfile(modelId);
 
-    // No picker UI for models that support neither thinking nor the 1M context window.
-    if (!profile.supportsThinking && !profile.supports1MContext) {
+    // The 1M context window is *toggleable* (200K default ↔ 1M) on Opus 4.6/4.7/4.8 and
+    // Sonnet 4.x. Detected dynamically: a model is toggleable iff its advertised input limit
+    // differs with the 1M setting off vs on. Models with a single fixed window show no picker.
+    const supportsToggleable1MContext =
+      profile.supports1MContext &&
+      getModelTokenLimits(modelId, false).maxInputTokens !==
+        getModelTokenLimits(modelId, true).maxInputTokens;
+
+    // No picker UI for models that support neither thinking nor a toggleable 1M context window.
+    if (!profile.supportsThinking && !supportsToggleable1MContext) {
       return undefined;
     }
 
@@ -1257,22 +1265,24 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         }
       : undefined;
 
-    // Context-length picker for models that support the 1M context window. The default mirrors
-    // the workspace `bedrock.context1M.enabled` setting (1M is on by default) so the picker shows
-    // the user's effective default selection.
-    const contextLength: SchemaProperty | undefined = profile.supports1MContext
+    // Context-size picker for models whose 1M context window is toggleable. Surfaced by VS Code
+    // as the dedicated "Context Size" control (`group: "tokens"`). The enum values MUST be numeric
+    // total-context-window token counts — VS Code renders them via `formatTokenCount(Number(value))`
+    // and `enumItemLabels` overrides the displayed text. Default mirrors the workspace
+    // `bedrock.context1M.enabled` setting (1M is on by default).
+    const contextLength: SchemaProperty | undefined = supportsToggleable1MContext
       ? {
-          default: "1m",
+          default: 1_000_000,
           description: "Context window size for this model.",
-          enum: ["default", "1m"],
+          enum: [200_000, 1_000_000],
           enumDescriptions: [
             "Standard 200K-token context window.",
             "Extended 1M-token context window (beta; may incur higher cost and latency).",
           ],
           enumItemLabels: ["200K", "1M"],
-          // `group: "navigation"` surfaces this as a dedicated picker button next to the model.
-          group: "navigation",
-          type: "string",
+          // `group: "tokens"` surfaces this as the dedicated "Context Size" picker button.
+          group: "tokens",
+          type: "number",
         }
       : undefined;
 

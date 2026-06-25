@@ -11438,7 +11438,7 @@ var require_package2 = __commonJS((exports2, module2) => {
 
 // node_modules/@aws-sdk/util-user-agent-node/dist-cjs/index.js
 var require_dist_cjs41 = __commonJS((exports2) => {
-  var __dirname = "/Users/zhenxz/projects/worktrees/amazon-bedrock-copilot-chat-feat-context-length-picker/node_modules/@aws-sdk/util-user-agent-node/dist-cjs";
+  var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/node_modules/@aws-sdk/util-user-agent-node/dist-cjs";
   var node_os = require("node:os");
   var node_process = require("node:process");
   var utilConfigProvider = require_dist_cjs26();
@@ -50634,7 +50634,7 @@ var require_tikTokenizer = __commonJS((exports2) => {
 
 // node_modules/@microsoft/tiktokenizer/dist/tokenizerBuilder.js
 var require_tokenizerBuilder = __commonJS((exports2) => {
-  var __dirname = "/Users/zhenxz/projects/worktrees/amazon-bedrock-copilot-chat-feat-context-length-picker/node_modules/@microsoft/tiktokenizer/dist";
+  var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/node_modules/@microsoft/tiktokenizer/dist";
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.MODEL_TO_ENCODING = undefined;
   var tikTokenizer_1 = require_tikTokenizer();
@@ -52181,7 +52181,10 @@ function getModelTokenLimits(modelId, enable1MContext = false) {
 }
 function getClaudeTokenLimits(normalizedModelId, enable1MContext) {
   if (normalizedModelId.includes("opus-4-8") || normalizedModelId.includes("opus-4-7")) {
-    return { maxInputTokens: 1e6 - 128000, maxOutputTokens: 128000 };
+    return {
+      maxInputTokens: (enable1MContext ? 1e6 : 200000) - 128000,
+      maxOutputTokens: 128000
+    };
   }
   if (normalizedModelId.includes("opus-4-6")) {
     return {
@@ -53058,7 +53061,7 @@ var import_tiktokenizer = __toESM(require_dist(), 1);
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
 var vscode6 = __toESM(require("vscode"));
-var __dirname = "/Users/zhenxz/projects/worktrees/amazon-bedrock-copilot-chat-feat-context-length-picker/src";
+var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/src";
 var ENCODER = "o200k_base";
 var RANK_FILE_NAME = "o200k_base.tiktoken";
 var CACHE_SIZE = 5000;
@@ -53681,10 +53684,8 @@ class BedrockChatModelProvider {
       settings.thinking.display = display;
     }
     const contextLength = modelConfiguration.contextLength;
-    if (contextLength === "1m") {
-      settings.context1M.enabled = true;
-    } else if (contextLength === "default") {
-      settings.context1M.enabled = false;
+    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
+      settings.context1M.enabled = contextLength >= 1e6;
     }
   }
   applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
@@ -53800,7 +53801,8 @@ class BedrockChatModelProvider {
   }
   buildModelConfigurationSchema(modelId) {
     const profile = getModelProfile(modelId);
-    if (!profile.supportsThinking && !profile.supports1MContext) {
+    const supportsToggleable1MContext = profile.supports1MContext && getModelTokenLimits(modelId, false).maxInputTokens !== getModelTokenLimits(modelId, true).maxInputTokens;
+    if (!profile.supportsThinking && !supportsToggleable1MContext) {
       return;
     }
     const thinkingEnabled = profile.supportsThinking ? {
@@ -53832,17 +53834,17 @@ class BedrockChatModelProvider {
       enumItemLabels: ["Summarized", "Omitted"],
       type: "string"
     } : undefined;
-    const contextLength = profile.supports1MContext ? {
-      default: "1m",
+    const contextLength = supportsToggleable1MContext ? {
+      default: 1e6,
       description: "Context window size for this model.",
-      enum: ["default", "1m"],
+      enum: [200000, 1e6],
       enumDescriptions: [
         "Standard 200K-token context window.",
         "Extended 1M-token context window (beta; may incur higher cost and latency)."
       ],
       enumItemLabels: ["200K", "1M"],
-      group: "navigation",
-      type: "string"
+      group: "tokens",
+      type: "number"
     } : undefined;
     return {
       properties: {
@@ -54395,5 +54397,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=B5860A3144913EC264756E2164756E21
+//# debugId=C61517F9A7C8CBD164756E2164756E21
 //# sourceMappingURL=extension.js.map

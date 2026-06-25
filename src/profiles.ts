@@ -287,13 +287,19 @@ function getClaudeTokenLimits(
   normalizedModelId: string,
   enable1MContext: boolean,
 ): ModelTokenLimits {
-  // Claude Opus 4.8 and Opus 4.7: always 1M context window, 128K max output
-  // temperature/top_p/top_k not supported; adaptive thinking only (type: "adaptive")
+  // Claude Opus 4.8 and Opus 4.7: 200K default context (or 1M with the
+  // `context-1m-2025-08-07` beta enabled), 128K max output. The model card headlines a 1M
+  // context window, but — like the official Claude Code CLI — the *effective* window defaults
+  // to 200K and opts into 1M via the beta header (Claude Code does this with the `opus[1m]`
+  // model-string suffix). temperature/top_p/top_k unsupported; adaptive thinking only.
   // See:
   //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
   //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
   if (normalizedModelId.includes("opus-4-8") || normalizedModelId.includes("opus-4-7")) {
-    return { maxInputTokens: 1_000_000 - 128_000, maxOutputTokens: 128_000 };
+    return {
+      maxInputTokens: (enable1MContext ? 1_000_000 : 200_000) - 128_000,
+      maxOutputTokens: 128_000,
+    };
   }
 
   // Claude Opus 4.6: 200K context (or 1M with setting enabled), 128K max output
@@ -380,11 +386,12 @@ function normalizeModelId(modelId: string): string {
 
 /**
  * Check if a model supports 1M context window
- * Claude Opus 4.8/4.7 always run at 1M; Opus 4.6 and Sonnet 4.x models support extended
- * 1M context via the anthropic_beta parameter.
+ * Claude Opus 4.8/4.7/4.6 and Sonnet 4.x support an extended 1M context window that is opted
+ * into via the `context-1m-2025-08-07` anthropic_beta parameter (default effective window is
+ * 200K). This mirrors the official Claude Code CLI, which exposes a 200K↔1M toggle for all of
+ * Opus 4.6/4.7/4.8 (via the `opus[1m]` model-string suffix) rather than running them at a fixed 1M.
  */
 function supports1MContext(modelId: string): boolean {
-  // Opus 4.8 and Opus 4.7 always have 1M context (no toggle needed — it's the only option per the AWS docs)
   return (
     modelId.includes("opus-4-8") ||
     modelId.includes("opus-4-7") ||

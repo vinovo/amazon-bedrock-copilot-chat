@@ -1161,15 +1161,39 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
   });
 
   suite("model configuration schema (picker controls)", () => {
-    test("includes contextLength navigation picker for 1M-capable models", () => {
-      // Sonnet 4.5 supports the 1M context window.
+    test("includes contextLength tokens picker for toggleable-1M models", () => {
+      // Sonnet 4.5 has a toggleable 1M context window (standard 200K).
       const schema = buildModelConfigurationSchema("anthropic.claude-sonnet-4-5-20250929-v1:0");
       const contextLength = schema?.properties?.contextLength;
       assert.ok(contextLength, "expected contextLength property");
-      assert.equal(contextLength.group, "navigation");
-      assert.deepEqual(contextLength.enum, ["default", "1m"]);
+      // `group: "tokens"` makes VS Code render this as the dedicated "Context Size" picker.
+      assert.equal(contextLength.group, "tokens");
+      assert.equal(contextLength.type, "number");
+      // Enum values MUST be numeric token counts (VS Code formats them via formatTokenCount).
+      assert.deepEqual(contextLength.enum, [200_000, 1_000_000]);
       assert.deepEqual(contextLength.enumItemLabels, ["200K", "1M"]);
-      assert.equal(contextLength.default, "1m");
+      assert.equal(contextLength.default, 1_000_000);
+    });
+
+    test("includes contextLength tokens picker for Opus 4.8 (toggleable 200K<->1M)", () => {
+      // Opus 4.8 exposes a toggleable 1M context window (200K default), matching the official
+      // Claude Code CLI which offers an `opus[1m]` toggle for Opus 4.6/4.7/4.8.
+      const schema = buildModelConfigurationSchema("anthropic.claude-opus-4-8-20251101-v1:0");
+      const contextLength = schema?.properties?.contextLength;
+      assert.ok(contextLength, "expected contextLength property for Opus 4.8");
+      assert.equal(contextLength.group, "tokens");
+      assert.deepEqual(contextLength.enum, [200_000, 1_000_000]);
+    });
+
+    test("includes contextLength tokens picker for Opus 4.6 (toggleable 200K<->1M)", () => {
+      const schema = buildModelConfigurationSchema("anthropic.claude-opus-4-6-v1");
+      assert.ok(schema?.properties?.contextLength, "expected contextLength property for Opus 4.6");
+    });
+
+    test("omits contextLength for Opus 4.5 (200K only, no 1M)", () => {
+      // Opus 4.5 has a fixed 200K window on Bedrock — no 200K<->1M choice, so no picker.
+      const schema = buildModelConfigurationSchema("anthropic.claude-opus-4-5-20251101-v1:0");
+      assert.ok(!schema?.properties?.contextLength);
     });
 
     test("omits contextLength for models without 1M context support", () => {
@@ -1186,13 +1210,13 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
   });
 
   suite("model configuration overrides (picker -> request)", () => {
-    test("contextLength=default disables the 1M context window", () => {
-      const settings = applyConfigOverride({ contextLength: "default" });
+    test("contextLength=200000 disables the 1M context window", () => {
+      const settings = applyConfigOverride({ contextLength: 200_000 });
       assert.equal(settings.context1M.enabled, false);
     });
 
-    test("contextLength=1m enables the 1M context window", () => {
-      const settings = applyConfigOverride({ contextLength: "1m" });
+    test("contextLength=1000000 enables the 1M context window", () => {
+      const settings = applyConfigOverride({ contextLength: 1_000_000 });
       assert.equal(settings.context1M.enabled, true);
     });
 
@@ -1202,7 +1226,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
       assert.equal(settings.thinking.effort, "low");
     });
 
-    test("unknown contextLength value is ignored", () => {
+    test("non-numeric contextLength value is ignored", () => {
       const settings = applyConfigOverride({ contextLength: "bogus" });
       assert.equal(settings.context1M.enabled, true);
     });
