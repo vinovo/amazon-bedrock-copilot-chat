@@ -63,6 +63,29 @@ const callCalcThinkingConfig = (
   ) as { budgetTokens: number; extendedThinkingEnabled: boolean };
 };
 
+// Helper to call the private buildModelConfigurationSchema method
+const buildModelConfigurationSchema = (modelId: string) => {
+  const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
+  return (provider as any).buildModelConfigurationSchema(modelId) as
+    | undefined
+    | { properties?: Record<string, Record<string, unknown>> };
+};
+
+// Helper to call the private applyModelConfigurationOverrides method against a minimal
+// settings object, returning the mutated settings for assertions.
+const applyConfigOverride = (modelConfiguration: Record<string, unknown> | undefined) => {
+  const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
+  const settings = {
+    context1M: { enabled: true },
+    thinking: { display: "summarized", effort: "high", enabled: true },
+  } as any;
+  (provider as any).applyModelConfigurationOverrides(settings, modelConfiguration);
+  return settings as {
+    context1M: { enabled: boolean };
+    thinking: { display: string; effort: string; enabled: boolean };
+  };
+};
+
 suite("Amazon Bedrock Chat Provider Extension", () => {
   suite("provider", () => {
     test("prepareLanguageModelChatInformation returns array (no key -> sentinel only)", async () => {
@@ -1134,6 +1157,54 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
       // budgetTokens = min(16000, 32000, 96000) = 16000
       assert.equal(result.budgetTokens, 16_000);
       assert.equal(result.extendedThinkingEnabled, true);
+    });
+  });
+
+  suite("model configuration schema (picker controls)", () => {
+    test("includes contextLength navigation picker for 1M-capable models", () => {
+      // Sonnet 4.5 supports the 1M context window.
+      const schema = buildModelConfigurationSchema("anthropic.claude-sonnet-4-5-20250929-v1:0");
+      const contextLength = schema?.properties?.contextLength;
+      assert.ok(contextLength, "expected contextLength property");
+      assert.equal(contextLength.group, "navigation");
+      assert.deepEqual(contextLength.enum, ["default", "1m"]);
+      assert.deepEqual(contextLength.enumItemLabels, ["200K", "1M"]);
+      assert.equal(contextLength.default, "1m");
+    });
+
+    test("omits contextLength for models without 1M context support", () => {
+      // Haiku 3.5 does not support the 1M context window.
+      const schema = buildModelConfigurationSchema("anthropic.claude-3-5-haiku-20241022-v1:0");
+      assert.ok(!schema?.properties?.contextLength);
+    });
+
+    test("returns undefined for models with no configurable capabilities", () => {
+      // Mistral has neither thinking nor 1M context.
+      const schema = buildModelConfigurationSchema("mistral.mistral-large-2407-v1:0");
+      assert.equal(schema, undefined);
+    });
+  });
+
+  suite("model configuration overrides (picker -> request)", () => {
+    test("contextLength=default disables the 1M context window", () => {
+      const settings = applyConfigOverride({ contextLength: "default" });
+      assert.equal(settings.context1M.enabled, false);
+    });
+
+    test("contextLength=1m enables the 1M context window", () => {
+      const settings = applyConfigOverride({ contextLength: "1m" });
+      assert.equal(settings.context1M.enabled, true);
+    });
+
+    test("absent contextLength leaves the fallback setting intact", () => {
+      const settings = applyConfigOverride({ thinkingEffort: "low" });
+      assert.equal(settings.context1M.enabled, true);
+      assert.equal(settings.thinking.effort, "low");
+    });
+
+    test("unknown contextLength value is ignored", () => {
+      const settings = applyConfigOverride({ contextLength: "bogus" });
+      assert.equal(settings.context1M.enabled, true);
     });
   });
 });

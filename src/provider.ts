@@ -330,7 +330,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
                 toolCalling: true,
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
-              configurationSchema: this.buildThinkingConfigurationSchema(modelIdToUse),
+              configurationSchema: this.buildModelConfigurationSchema(modelIdToUse),
               family: "bedrock",
               id: modelIdToUse,
               isUserSelectable: true,
@@ -373,7 +373,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
                 toolCalling: true,
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
-              configurationSchema: this.buildThinkingConfigurationSchema(modelIdForLimits),
+              configurationSchema: this.buildModelConfigurationSchema(modelIdForLimits),
               family: "bedrock",
               id: profile.modelArn,
               isUserSelectable: true,
@@ -636,12 +636,15 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       // Get settings and model configuration
       const settings = await getBedrockSettings(this.globalState);
       const modelProfile = getModelProfile(baseModelId);
-      const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
 
       // Per-model picker configuration (proposed `chatProvider` API) takes precedence over the
-      // workspace `bedrock.thinking.*` fallback settings. Whatever the user selects in the model
-      // picker arrives on `options.modelConfiguration`, keyed to our `configurationSchema`.
+      // workspace `bedrock.thinking.*` / `bedrock.context1M.*` fallback settings. Whatever the
+      // user selects in the model picker arrives on `options.modelConfiguration`, keyed to our
+      // `configurationSchema`. Apply it before computing token limits so the context-length
+      // picker choice (200K vs 1M) is reflected in this request's limits and beta headers.
       this.applyModelConfigurationOverrides(settings, options.modelConfiguration);
+
+      const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
 
       // Calculate thinking configuration
       // Use model's maxOutputTokens as default when VSCode doesn't provide max_tokens.
@@ -961,8 +964,9 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
 
   /**
    * Apply per-model picker configuration (proposed `chatProvider` API) on top of the workspace
-   * `bedrock.thinking.*` fallback settings. Values present in `modelConfiguration` win; absent
-   * values leave the fallback intact. Unknown/invalid values are ignored.
+   * `bedrock.thinking.*` and `bedrock.context1M.*` fallback settings. Values present in
+   * `modelConfiguration` win; absent values leave the fallback intact. Unknown/invalid values
+   * are ignored.
    */
   private applyModelConfigurationOverrides(
     settings: Awaited<ReturnType<typeof getBedrockSettings>>,
@@ -984,6 +988,15 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     const display = modelConfiguration.thinkingDisplay;
     if (display === "summarized" || display === "omitted") {
       settings.thinking.display = display;
+    }
+
+    // Context-length picker: "1m" enables the 1M context window, "default" forces the standard
+    // 200K window for this request. Absent / unknown values leave the workspace setting intact.
+    const contextLength = modelConfiguration.contextLength;
+    if (contextLength === "1m") {
+      settings.context1M.enabled = true;
+    } else if (contextLength === "default") {
+      settings.context1M.enabled = false;
     }
   }
 
@@ -1175,6 +1188,105 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   }
 
   /**
+   * Build the per-model `configurationSchema` (proposed `chatProvider` API) that drives the
+   * model picker's inline controls. Returns `undefined` for models without any configurable
+   * capability so no picker UI is shown for them.
+   *
+   * The schema is keyed off the model's capability profile:
+   * - `thinkingEnabled` (boolean) — toggle extended thinking, when the model supports thinking.
+   * - `thinkingEffort` (enum, `group: "navigation"`) — effort level, surfaced as the dedicated
+   *   "Thinking Effort" picker button for effort-capable models.
+   * - `thinkingDisplay` (enum) — summarized vs omitted thinking output, for display-capable models.
+   * - `contextLength` (enum, `group: "navigation"`) — context-window size, surfaced as the
+   *   dedicated context-length picker button for models that support the 1M context window.
+   *
+   * Whatever the user picks arrives back on `options.modelConfiguration` and takes precedence
+   * over the workspace `bedrock.*` fallback settings.
+   */
+  private buildModelConfigurationSchema(
+    modelId: string,
+  ): BedrockLanguageModelChatInformation["configurationSchema"] {
+    const profile = getModelProfile(modelId);
+
+    // No picker UI for models that support neither thinking nor the 1M context window.
+    if (!profile.supportsThinking && !profile.supports1MContext) {
+      return undefined;
+    }
+
+    type SchemaProperties = NonNullable<
+      BedrockLanguageModelChatInformation["configurationSchema"]
+    >["properties"];
+    type SchemaProperty = NonNullable<SchemaProperties>[string];
+
+    const thinkingEnabled: SchemaProperty | undefined = profile.supportsThinking
+      ? {
+          default: true,
+          description: "Enable extended thinking for this model.",
+          type: "boolean",
+        }
+      : undefined;
+
+    const thinkingEffort: SchemaProperty | undefined = profile.supportsThinkingEffort
+      ? {
+          default: "high",
+          description: "Thinking effort level.",
+          enum: ["high", "medium", "low"],
+          enumDescriptions: [
+            "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
+            "Balanced approach with moderate token savings.",
+            "Most efficient — significant token savings with some capability reduction.",
+          ],
+          enumItemLabels: ["High", "Medium", "Low"],
+          // `group: "navigation"` surfaces this as the dedicated picker button (UBB mode).
+          group: "navigation",
+          type: "string",
+        }
+      : undefined;
+
+    const thinkingDisplay: SchemaProperty | undefined = profile.supportsThinkingDisplay
+      ? {
+          default: "summarized",
+          description: "How thinking content is returned.",
+          enum: ["summarized", "omitted"],
+          enumDescriptions: [
+            "Stream summarized thinking text (default).",
+            "Suppress streamed thinking text for faster time-to-first-token (still billed in full).",
+          ],
+          enumItemLabels: ["Summarized", "Omitted"],
+          type: "string",
+        }
+      : undefined;
+
+    // Context-length picker for models that support the 1M context window. The default mirrors
+    // the workspace `bedrock.context1M.enabled` setting (1M is on by default) so the picker shows
+    // the user's effective default selection.
+    const contextLength: SchemaProperty | undefined = profile.supports1MContext
+      ? {
+          default: "1m",
+          description: "Context window size for this model.",
+          enum: ["default", "1m"],
+          enumDescriptions: [
+            "Standard 200K-token context window.",
+            "Extended 1M-token context window (beta; may incur higher cost and latency).",
+          ],
+          enumItemLabels: ["200K", "1M"],
+          // `group: "navigation"` surfaces this as a dedicated picker button next to the model.
+          group: "navigation",
+          type: "string",
+        }
+      : undefined;
+
+    return {
+      properties: {
+        ...(thinkingEnabled ? { thinkingEnabled } : {}),
+        ...(thinkingEffort ? { thinkingEffort } : {}),
+        ...(thinkingDisplay ? { thinkingDisplay } : {}),
+        ...(contextLength ? { contextLength } : {}),
+      },
+    };
+  }
+
+  /**
    * Build and configure the request input for Bedrock API
    */
   private buildRequestInput(
@@ -1262,80 +1374,6 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   private buildSentinelModelList(error: unknown): BedrockLanguageModelChatInformation[] {
     const sentinel = makeBedrockErrorSentinel(error);
     return this.lastKnownModels.length > 0 ? [...this.lastKnownModels, sentinel] : [sentinel];
-  }
-
-  /**
-   * Build the per-model `configurationSchema` (proposed `chatProvider` API) that drives the
-   * model picker's thinking controls. Returns `undefined` for models without any thinking
-   * capability so no picker UI is shown for them.
-   *
-   * The schema is keyed off the model's capability profile:
-   * - `thinkingEnabled` (boolean) — toggle extended thinking, when the model supports thinking.
-   * - `thinkingEffort` (enum, `group: "navigation"`) — effort level, surfaced as the dedicated
-   *   "Thinking Effort" picker button for effort-capable models.
-   * - `thinkingDisplay` (enum) — summarized vs omitted thinking output, for display-capable models.
-   *
-   * Whatever the user picks arrives back on `options.modelConfiguration` and takes precedence
-   * over the workspace `bedrock.thinking.*` fallback settings.
-   */
-  private buildThinkingConfigurationSchema(
-    modelId: string,
-  ): BedrockLanguageModelChatInformation["configurationSchema"] {
-    const profile = getModelProfile(modelId);
-
-    if (!profile.supportsThinking) {
-      return undefined;
-    }
-
-    type SchemaProperties = NonNullable<
-      BedrockLanguageModelChatInformation["configurationSchema"]
-    >["properties"];
-    type SchemaProperty = NonNullable<SchemaProperties>[string];
-
-    const thinkingEnabled: SchemaProperty = {
-      default: true,
-      description: "Enable extended thinking for this model.",
-      type: "boolean",
-    };
-
-    const thinkingEffort: SchemaProperty | undefined = profile.supportsThinkingEffort
-      ? {
-          default: "high",
-          description: "Thinking effort level.",
-          enum: ["high", "medium", "low"],
-          enumDescriptions: [
-            "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
-            "Balanced approach with moderate token savings.",
-            "Most efficient — significant token savings with some capability reduction.",
-          ],
-          enumItemLabels: ["High", "Medium", "Low"],
-          // `group: "navigation"` surfaces this as the dedicated picker button (UBB mode).
-          group: "navigation",
-          type: "string",
-        }
-      : undefined;
-
-    const thinkingDisplay: SchemaProperty | undefined = profile.supportsThinkingDisplay
-      ? {
-          default: "summarized",
-          description: "How thinking content is returned.",
-          enum: ["summarized", "omitted"],
-          enumDescriptions: [
-            "Stream summarized thinking text (default).",
-            "Suppress streamed thinking text for faster time-to-first-token (still billed in full).",
-          ],
-          enumItemLabels: ["Summarized", "Omitted"],
-          type: "string",
-        }
-      : undefined;
-
-    return {
-      properties: {
-        thinkingEnabled,
-        ...(thinkingEffort ? { thinkingEffort } : {}),
-        ...(thinkingDisplay ? { thinkingDisplay } : {}),
-      },
-    };
   }
 
   /**
