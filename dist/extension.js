@@ -11438,7 +11438,7 @@ var require_package2 = __commonJS((exports2, module2) => {
 
 // node_modules/@aws-sdk/util-user-agent-node/dist-cjs/index.js
 var require_dist_cjs41 = __commonJS((exports2) => {
-  var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/node_modules/@aws-sdk/util-user-agent-node/dist-cjs";
+  var __dirname = "/Users/zhenxz/projects/worktrees/amazon-bedrock-copilot-chat-feat-context-length-picker/node_modules/@aws-sdk/util-user-agent-node/dist-cjs";
   var node_os = require("node:os");
   var node_process = require("node:process");
   var utilConfigProvider = require_dist_cjs26();
@@ -50634,7 +50634,7 @@ var require_tikTokenizer = __commonJS((exports2) => {
 
 // node_modules/@microsoft/tiktokenizer/dist/tokenizerBuilder.js
 var require_tokenizerBuilder = __commonJS((exports2) => {
-  var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/node_modules/@microsoft/tiktokenizer/dist";
+  var __dirname = "/Users/zhenxz/projects/worktrees/amazon-bedrock-copilot-chat-feat-context-length-picker/node_modules/@microsoft/tiktokenizer/dist";
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.MODEL_TO_ENCODING = undefined;
   var tikTokenizer_1 = require_tikTokenizer();
@@ -53058,7 +53058,7 @@ var import_tiktokenizer = __toESM(require_dist(), 1);
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
 var vscode6 = __toESM(require("vscode"));
-var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/src";
+var __dirname = "/Users/zhenxz/projects/worktrees/amazon-bedrock-copilot-chat-feat-context-length-picker/src";
 var ENCODER = "o200k_base";
 var RANK_FILE_NAME = "o200k_base.tiktoken";
 var CACHE_SIZE = 5000;
@@ -53321,7 +53321,7 @@ class BedrockChatModelProvider {
                 toolCalling: true
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
-              configurationSchema: this.buildThinkingConfigurationSchema(modelIdToUse),
+              configurationSchema: this.buildModelConfigurationSchema(modelIdToUse),
               family: "bedrock",
               id: modelIdToUse,
               isUserSelectable: true,
@@ -53352,7 +53352,7 @@ class BedrockChatModelProvider {
                 toolCalling: true
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
-              configurationSchema: this.buildThinkingConfigurationSchema(modelIdForLimits),
+              configurationSchema: this.buildModelConfigurationSchema(modelIdForLimits),
               family: "bedrock",
               id: profile.modelArn,
               isUserSelectable: true,
@@ -53522,8 +53522,8 @@ class BedrockChatModelProvider {
       this.logIncomingMessages(messages);
       const settings = await getBedrockSettings(this.globalState);
       const modelProfile = getModelProfile(baseModelId);
-      const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
       this.applyModelConfigurationOverrides(settings, options.modelConfiguration);
+      const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
       const maxTokensForRequest = typeof options.modelOptions?.max_tokens === "number" ? options.modelOptions.max_tokens : modelLimits.maxOutputTokens;
       const { budgetTokens, extendedThinkingEnabled: initialThinkingEnabled } = this.calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, settings.thinking.enabled);
       let extendedThinkingEnabled = initialThinkingEnabled;
@@ -53680,6 +53680,12 @@ class BedrockChatModelProvider {
     if (display === "summarized" || display === "omitted") {
       settings.thinking.display = display;
     }
+    const contextLength = modelConfiguration.contextLength;
+    if (contextLength === "1m") {
+      settings.context1M.enabled = true;
+    } else if (contextLength === "default") {
+      settings.context1M.enabled = false;
+    }
   }
   applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
     requestInput.inferenceConfig.temperature = 1;
@@ -53792,6 +53798,61 @@ class BedrockChatModelProvider {
     }
     return candidates;
   }
+  buildModelConfigurationSchema(modelId) {
+    const profile = getModelProfile(modelId);
+    if (!profile.supportsThinking && !profile.supports1MContext) {
+      return;
+    }
+    const thinkingEnabled = profile.supportsThinking ? {
+      default: true,
+      description: "Enable extended thinking for this model.",
+      type: "boolean"
+    } : undefined;
+    const thinkingEffort = profile.supportsThinkingEffort ? {
+      default: "high",
+      description: "Thinking effort level.",
+      enum: ["high", "medium", "low"],
+      enumDescriptions: [
+        "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
+        "Balanced approach with moderate token savings.",
+        "Most efficient — significant token savings with some capability reduction."
+      ],
+      enumItemLabels: ["High", "Medium", "Low"],
+      group: "navigation",
+      type: "string"
+    } : undefined;
+    const thinkingDisplay = profile.supportsThinkingDisplay ? {
+      default: "summarized",
+      description: "How thinking content is returned.",
+      enum: ["summarized", "omitted"],
+      enumDescriptions: [
+        "Stream summarized thinking text (default).",
+        "Suppress streamed thinking text for faster time-to-first-token (still billed in full)."
+      ],
+      enumItemLabels: ["Summarized", "Omitted"],
+      type: "string"
+    } : undefined;
+    const contextLength = profile.supports1MContext ? {
+      default: "1m",
+      description: "Context window size for this model.",
+      enum: ["default", "1m"],
+      enumDescriptions: [
+        "Standard 200K-token context window.",
+        "Extended 1M-token context window (beta; may incur higher cost and latency)."
+      ],
+      enumItemLabels: ["200K", "1M"],
+      group: "navigation",
+      type: "string"
+    } : undefined;
+    return {
+      properties: {
+        ...thinkingEnabled ? { thinkingEnabled } : {},
+        ...thinkingEffort ? { thinkingEffort } : {},
+        ...thinkingDisplay ? { thinkingDisplay } : {},
+        ...contextLength ? { contextLength } : {}
+      }
+    };
+  }
   buildRequestInput(model, modelProfile, converted, options, toolConfig, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
     const usesAdaptiveThinking = modelProfile.supportsAdaptiveThinkingOnly || modelProfile.prefersAdaptiveThinking && extendedThinkingEnabled;
     const requestInput = {
@@ -53827,48 +53888,6 @@ class BedrockChatModelProvider {
   buildSentinelModelList(error) {
     const sentinel = makeBedrockErrorSentinel(error);
     return this.lastKnownModels.length > 0 ? [...this.lastKnownModels, sentinel] : [sentinel];
-  }
-  buildThinkingConfigurationSchema(modelId) {
-    const profile = getModelProfile(modelId);
-    if (!profile.supportsThinking) {
-      return;
-    }
-    const thinkingEnabled = {
-      default: true,
-      description: "Enable extended thinking for this model.",
-      type: "boolean"
-    };
-    const thinkingEffort = profile.supportsThinkingEffort ? {
-      default: "high",
-      description: "Thinking effort level.",
-      enum: ["high", "medium", "low"],
-      enumDescriptions: [
-        "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
-        "Balanced approach with moderate token savings.",
-        "Most efficient — significant token savings with some capability reduction."
-      ],
-      enumItemLabels: ["High", "Medium", "Low"],
-      group: "navigation",
-      type: "string"
-    } : undefined;
-    const thinkingDisplay = profile.supportsThinkingDisplay ? {
-      default: "summarized",
-      description: "How thinking content is returned.",
-      enum: ["summarized", "omitted"],
-      enumDescriptions: [
-        "Stream summarized thinking text (default).",
-        "Suppress streamed thinking text for faster time-to-first-token (still billed in full)."
-      ],
-      enumItemLabels: ["Summarized", "Omitted"],
-      type: "string"
-    } : undefined;
-    return {
-      properties: {
-        thinkingEnabled,
-        ...thinkingEffort ? { thinkingEffort } : {},
-        ...thinkingDisplay ? { thinkingDisplay } : {}
-      }
-    };
   }
   calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, thinkingEnabled) {
     const baseBudget = 16000;
@@ -54376,5 +54395,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=843EB26826C25B4064756E2164756E21
+//# debugId=B5860A3144913EC264756E2164756E21
 //# sourceMappingURL=extension.js.map
