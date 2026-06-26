@@ -64,9 +64,9 @@ const callCalcThinkingConfig = (
 };
 
 // Helper to call the private buildModelConfigurationSchema method
-const buildModelConfigurationSchema = (modelId: string) => {
+const buildModelConfigurationSchema = (modelId: string, context1MEnabled = true) => {
   const provider = new BedrockChatModelProvider(mockSecretStorage, mockGlobalState);
-  return (provider as any).buildModelConfigurationSchema(modelId) as
+  return (provider as any).buildModelConfigurationSchema(modelId, context1MEnabled) as
     | undefined
     | { properties?: Record<string, Record<string, unknown>> };
 };
@@ -79,7 +79,11 @@ const applyConfigOverride = (modelConfiguration: Record<string, unknown> | undef
     context1M: { enabled: true },
     thinking: { display: "summarized", effort: "high", enabled: true },
   } as any;
-  (provider as any).applyModelConfigurationOverrides(settings, modelConfiguration);
+  (provider as any).applyModelConfigurationOverrides(
+    "anthropic.claude-opus-4-8-20251101-v1:0",
+    settings,
+    modelConfiguration,
+  );
   return settings as {
     context1M: { enabled: boolean };
     thinking: { display: string; effort: string; enabled: boolean };
@@ -1188,6 +1192,22 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     test("includes contextLength tokens picker for Opus 4.6 (toggleable 200K<->1M)", () => {
       const schema = buildModelConfigurationSchema("anthropic.claude-opus-4-6-v1");
       assert.ok(schema?.properties?.contextLength, "expected contextLength property for Opus 4.6");
+    });
+
+    test("contextLength default follows the persisted/build-time selection", () => {
+      // The picker default is the advertised window: 1M when enabled, 200K otherwise. This is what
+      // keeps the picker UI in sync with the badge denominator after a refresh.
+      const enabled = buildModelConfigurationSchema(
+        "anthropic.claude-opus-4-8-20251101-v1:0",
+        true,
+      );
+      assert.equal(enabled?.properties?.contextLength?.default, 1_000_000);
+
+      const disabled = buildModelConfigurationSchema(
+        "anthropic.claude-opus-4-8-20251101-v1:0",
+        false,
+      );
+      assert.equal(disabled?.properties?.contextLength?.default, 200_000);
     });
 
     test("omits contextLength for Opus 4.5 (200K only, no 1M)", () => {

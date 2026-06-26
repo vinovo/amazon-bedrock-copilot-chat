@@ -53212,6 +53212,7 @@ var BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
 class BedrockChatModelProvider {
   secrets;
   globalState;
+  static CONTEXT_SELECTION_STATE_KEY = "bedrock.contextSelection.byModel";
   static MODEL_CHANGE_ECHO_WINDOW_MS = 5000;
   _onDidChangeLanguageModelInformation = new vscode7.EventEmitter;
   onDidChangeLanguageModelChatInformation = this._onDidChangeLanguageModelInformation.event;
@@ -53310,7 +53311,8 @@ class BedrockChatModelProvider {
               logger.debug(`[Bedrock Model Provider] Excluding inaccessible model: ${modelIdToUse} (not authorized or not available)`);
               continue;
             }
-            const limits = getModelTokenLimits(modelIdToUse, settings.context1M.enabled);
+            const context1MEnabled = this.resolveContext1MEnabled(modelIdToUse, settings.context1M.enabled);
+            const limits = getModelTokenLimits(modelIdToUse, context1MEnabled);
             const maxInput = limits.maxInputTokens;
             const maxOutput = limits.maxOutputTokens;
             const vision = m.inputModalities.includes(import_client_bedrock2.ModelModality.IMAGE);
@@ -53324,7 +53326,7 @@ class BedrockChatModelProvider {
                 toolCalling: true
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
-              configurationSchema: this.buildModelConfigurationSchema(modelIdToUse),
+              configurationSchema: this.buildModelConfigurationSchema(modelIdToUse, context1MEnabled),
               family: "bedrock",
               id: modelIdToUse,
               isUserSelectable: true,
@@ -53345,7 +53347,8 @@ class BedrockChatModelProvider {
               continue;
             }
             const modelIdForLimits = profile.baseModelId ?? profile.modelId;
-            const limits = getModelTokenLimits(modelIdForLimits, settings.context1M.enabled);
+            const context1MEnabled = this.resolveContext1MEnabled(profile.modelArn, settings.context1M.enabled);
+            const limits = getModelTokenLimits(modelIdForLimits, context1MEnabled);
             const maxInput = limits.maxInputTokens;
             const maxOutput = limits.maxOutputTokens;
             const vision = profile.inputModalities.includes(import_client_bedrock2.ModelModality.IMAGE);
@@ -53355,7 +53358,7 @@ class BedrockChatModelProvider {
                 toolCalling: true
               },
               category: BEDROCK_MODEL_PICKER_CATEGORY,
-              configurationSchema: this.buildModelConfigurationSchema(modelIdForLimits),
+              configurationSchema: this.buildModelConfigurationSchema(modelIdForLimits, context1MEnabled),
               family: "bedrock",
               id: profile.modelArn,
               isUserSelectable: true,
@@ -53525,7 +53528,7 @@ class BedrockChatModelProvider {
       this.logIncomingMessages(messages);
       const settings = await getBedrockSettings(this.globalState);
       const modelProfile = getModelProfile(baseModelId);
-      this.applyModelConfigurationOverrides(settings, options.modelConfiguration);
+      this.applyModelConfigurationOverrides(model.id, settings, options.modelConfiguration);
       const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
       const maxTokensForRequest = typeof options.modelOptions?.max_tokens === "number" ? options.modelOptions.max_tokens : modelLimits.maxOutputTokens;
       const { budgetTokens, extendedThinkingEnabled: initialThinkingEnabled } = this.calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, settings.thinking.enabled);
@@ -53668,7 +53671,7 @@ class BedrockChatModelProvider {
       thinkingEffort: thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined
     });
   }
-  applyModelConfigurationOverrides(settings, modelConfiguration) {
+  applyModelConfigurationOverrides(modelId, settings, modelConfiguration) {
     if (!modelConfiguration) {
       return;
     }
@@ -53686,6 +53689,16 @@ class BedrockChatModelProvider {
     const contextLength = modelConfiguration.contextLength;
     if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
       settings.context1M.enabled = contextLength >= 1e6;
+      this.setPersistedContextSelection(modelId, contextLength).then((changed) => {
+        if (changed) {
+          this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
+        }
+      }, (error) => {
+        logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
+          error: error instanceof Error ? error.message : String(error),
+          modelId
+        });
+      });
     }
   }
   applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
@@ -53799,7 +53812,7 @@ class BedrockChatModelProvider {
     }
     return candidates;
   }
-  buildModelConfigurationSchema(modelId) {
+  buildModelConfigurationSchema(modelId, context1MEnabled) {
     const profile = getModelProfile(modelId);
     const supportsToggleable1MContext = profile.supports1MContext && getModelTokenLimits(modelId, false).maxInputTokens !== getModelTokenLimits(modelId, true).maxInputTokens;
     if (!profile.supportsThinking && !supportsToggleable1MContext) {
@@ -53835,7 +53848,7 @@ class BedrockChatModelProvider {
       type: "string"
     } : undefined;
     const contextLength = supportsToggleable1MContext ? {
-      default: 1e6,
+      default: context1MEnabled ? 1e6 : 200000,
       description: "Context window size for this model.",
       enum: [200000, 1e6],
       enumDescriptions: [
@@ -54090,6 +54103,11 @@ class BedrockChatModelProvider {
     }
     return;
   }
+  getPersistedContextSelection(modelId) {
+    const map = this.globalState.get(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, {});
+    const value = map[modelId];
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  }
   logConvertedMessages(messages) {
     logger.debug("[Bedrock Model Provider] Converted to Bedrock messages:", messages.length);
     for (const [idx, msg] of messages.entries()) {
@@ -54285,6 +54303,21 @@ class BedrockChatModelProvider {
       cancellationListener.dispose();
     }
   }
+  resolveContext1MEnabled(modelId, fallback) {
+    const selection = this.getPersistedContextSelection(modelId);
+    return selection === undefined ? fallback : selection >= 1e6;
+  }
+  async setPersistedContextSelection(modelId, totalTokens) {
+    const map = {
+      ...this.globalState.get(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, {})
+    };
+    if (map[modelId] === totalTokens) {
+      return false;
+    }
+    map[modelId] = totalTokens;
+    await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, map);
+    return true;
+  }
   async validateTokenCount(model, requestInput, token) {
     const inputTokenCount = await this.countRequestTokens(model.id, {
       messages: requestInput.messages,
@@ -54397,5 +54430,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=C61517F9A7C8CBD164756E2164756E21
+//# debugId=8614514490C5123364756E2164756E21
 //# sourceMappingURL=extension.js.map
