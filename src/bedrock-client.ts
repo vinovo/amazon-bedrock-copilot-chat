@@ -666,6 +666,16 @@ export class BedrockAPIClient {
         regionalProfileIds: [`${regionPrefix}.anthropic.claude-opus-4-6-v1`],
       },
       {
+        // Converse API supported. Dateless ID (like Opus 4.7/4.8, Sonnet 4.6).
+        // Adaptive thinking only (type: "adaptive"); temperature/top_p/top_k unsupported.
+        // The `effort` parameter defaults to "high" and can be overridden. 1M context via beta.
+        // See: https://platform.claude.com/docs/en/docs/about-claude/models/overview
+        baseModelId: "anthropic.claude-sonnet-5",
+        displayName: "Claude Sonnet 5",
+        globalProfileId: hasGlobalProfiles ? "global.anthropic.claude-sonnet-5" : null,
+        regionalProfileIds: [`${regionPrefix}.anthropic.claude-sonnet-5`],
+      },
+      {
         baseModelId: "anthropic.claude-sonnet-4-6",
         displayName: "Claude Sonnet 4.6",
         globalProfileId: hasGlobalProfiles ? "global.anthropic.claude-sonnet-4-6" : null,

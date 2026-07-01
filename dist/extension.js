@@ -51781,6 +51781,12 @@ class BedrockAPIClient {
         regionalProfileIds: [`${regionPrefix}.anthropic.claude-opus-4-6-v1`]
       },
       {
+        baseModelId: "anthropic.claude-sonnet-5",
+        displayName: "Claude Sonnet 5",
+        globalProfileId: hasGlobalProfiles ? "global.anthropic.claude-sonnet-5" : null,
+        regionalProfileIds: [`${regionPrefix}.anthropic.claude-sonnet-5`]
+      },
+      {
         baseModelId: "anthropic.claude-sonnet-4-6",
         displayName: "Claude Sonnet 4.6",
         globalProfileId: hasGlobalProfiles ? "global.anthropic.claude-sonnet-4-6" : null,
@@ -52107,27 +52113,7 @@ function getModelProfile(modelId) {
       return defaultProfile;
     }
     case "anthropic": {
-      const supportsThinking = modelId.includes("opus-4") || modelId.includes("sonnet-4") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5") || modelId.includes("sonnet-3-7") || modelId.includes("sonnet-3.7");
-      const requiresInterleavedThinkingHeader = modelId.includes("opus-4") || modelId.includes("sonnet-4") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
-      const supportsCachingWithToolResults = !supportsThinking;
-      const supportsAdaptiveThinkingOnly = modelId.includes("opus-4-8") || modelId.includes("opus-4-7");
-      const prefersAdaptiveThinking = supportsAdaptiveThinkingOnly || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6");
-      const supportsThinkingDisplay = supportsThinking;
-      const supportsThinkingEffort = modelId.includes("opus-4-8") || modelId.includes("opus-4-6") || modelId.includes("opus-4-5") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-4-5") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
-      return {
-        prefersAdaptiveThinking,
-        requiresInterleavedThinkingHeader,
-        supports1MContext: supports1MContext(modelId),
-        supportsAdaptiveThinkingOnly,
-        supportsCachingWithToolResults,
-        supportsPromptCaching: true,
-        supportsThinking,
-        supportsThinkingDisplay,
-        supportsThinkingEffort,
-        supportsToolChoice: true,
-        supportsToolResultStatus: true,
-        toolResultFormat: "text"
-      };
+      return getAnthropicProfile(modelId);
     }
     case "mistral": {
       return {
@@ -52179,8 +52165,31 @@ function getModelTokenLimits(modelId, enable1MContext = false) {
     maxOutputTokens: 4096
   };
 }
+function getAnthropicProfile(modelId) {
+  const supportsThinking = modelId.includes("opus-4") || modelId.includes("sonnet-5") || modelId.includes("sonnet-4") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5") || modelId.includes("sonnet-3-7") || modelId.includes("sonnet-3.7");
+  const requiresInterleavedThinkingHeader = modelId.includes("opus-4") || modelId.includes("sonnet-4") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
+  const supportsCachingWithToolResults = !supportsThinking;
+  const supportsAdaptiveThinkingOnly = modelId.includes("opus-4-8") || modelId.includes("opus-4-7") || modelId.includes("sonnet-5");
+  const prefersAdaptiveThinking = supportsAdaptiveThinkingOnly || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6");
+  const supportsThinkingDisplay = supportsThinking;
+  const supportsThinkingEffort = modelId.includes("opus-4-8") || modelId.includes("opus-4-6") || modelId.includes("opus-4-5") || modelId.includes("sonnet-5") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-4-5") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
+  return {
+    prefersAdaptiveThinking,
+    requiresInterleavedThinkingHeader,
+    supports1MContext: supports1MContext(modelId),
+    supportsAdaptiveThinkingOnly,
+    supportsCachingWithToolResults,
+    supportsPromptCaching: true,
+    supportsThinking,
+    supportsThinkingDisplay,
+    supportsThinkingEffort,
+    supportsToolChoice: true,
+    supportsToolResultStatus: true,
+    toolResultFormat: "text"
+  };
+}
 function getClaudeTokenLimits(normalizedModelId, enable1MContext) {
-  if (normalizedModelId.includes("opus-4-8") || normalizedModelId.includes("opus-4-7")) {
+  if (normalizedModelId.includes("opus-4-8") || normalizedModelId.includes("opus-4-7") || normalizedModelId.includes("sonnet-5")) {
     return {
       maxInputTokens: (enable1MContext ? 1e6 : 200000) - 128000,
       maxOutputTokens: 128000
@@ -52235,7 +52244,7 @@ function normalizeModelId(modelId) {
   return modelId;
 }
 function supports1MContext(modelId) {
-  return modelId.includes("opus-4-8") || modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-4");
+  return modelId.includes("opus-4-8") || modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-5") || modelId.includes("sonnet-4");
 }
 
 // src/converters/messages.ts
@@ -54430,5 +54439,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=8614514490C5123364756E2164756E21
+//# debugId=9D3FD3DBFC8BDFD064756E2164756E21
 //# sourceMappingURL=extension.js.map

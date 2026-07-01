@@ -1194,6 +1194,15 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
       assert.ok(schema?.properties?.contextLength, "expected contextLength property for Opus 4.6");
     });
 
+    test("includes contextLength tokens picker for Sonnet 5 (toggleable 200K<->1M)", () => {
+      // Sonnet 5 exposes a toggleable 1M context window (200K default), like Opus 4.6/4.7/4.8.
+      const schema = buildModelConfigurationSchema("anthropic.claude-sonnet-5");
+      const contextLength = schema?.properties?.contextLength;
+      assert.ok(contextLength, "expected contextLength property for Sonnet 5");
+      assert.equal(contextLength.group, "tokens");
+      assert.deepEqual(contextLength.enum, [200_000, 1_000_000]);
+    });
+
     test("contextLength default follows the persisted/build-time selection", () => {
       // The picker default is the advertised window: 1M when enabled, 200K otherwise. This is what
       // keeps the picker UI in sync with the badge denominator after a refresh.

@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/vinovo/amazon-bedrock-copilot-chat"
   },
-  "version": "0.14.1",
+  "version": "0.15.0",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -94,7 +94,7 @@
             "Balanced approach with moderate token savings. Good for tasks requiring a balance of speed, cost, and performance.",
             "Most efficient—significant token savings with some capability reduction. Best for simpler tasks that need speed and lowest costs."
           ],
-          "description": "Fallback thinking effort level for effort-capable Claude models (e.g. Opus 4.8/4.6/4.5, Sonnet 4.6/4.5, Haiku 4.5). This is only used when the model picker does NOT provide a per-model 'Thinking Effort' selection — the picker's per-model value always takes precedence over this setting.",
+          "description": "Fallback thinking effort level for effort-capable Claude models (e.g. Opus 4.8/4.6/4.5, Sonnet 5, Sonnet 4.6/4.5, Haiku 4.5). This is only used when the model picker does NOT provide a per-model 'Thinking Effort' selection — the picker's per-model value always takes precedence over this setting.",
           "scope": "resource"
         },
         "bedrock.thinking.display": {
@@ -114,7 +114,7 @@
         "bedrock.context1M.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable 1M context window for Claude Sonnet 4.x and Opus 4.6 models. When enabled, these models can handle up to 1 million tokens of input context. Note: Using 1M context increases API costs.",
+          "description": "Enable 1M context window for Claude Sonnet 5, Sonnet 4.x, and Opus 4.6/4.7/4.8 models. When enabled, these models can handle up to 1 million tokens of input context. Note: Using 1M context increases API costs.",
           "scope": "resource"
         },
         "bedrock.promptCaching.enabled": {
