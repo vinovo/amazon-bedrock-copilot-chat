@@ -50981,6 +50981,8 @@ async function getBedrockSettings(globalState) {
   } else {
     preferredModel = preferredModelInspect.globalValue ?? undefined;
   }
+  const context1MInspect = config.inspect("context1M.enabled");
+  const context1MExplicitlySet = context1MInspect?.workspaceFolderValue !== undefined || context1MInspect?.workspaceValue !== undefined || context1MInspect?.globalValue !== undefined;
   const context1MEnabled = config.get("context1M.enabled") ?? true;
   const promptCachingEnabled = config.get("promptCaching.enabled") ?? true;
   const preferRegionalInferenceProfiles = config.get("inferenceProfiles.preferRegional") ?? false;
@@ -50997,7 +50999,8 @@ async function getBedrockSettings(globalState) {
   const thinkingDisplay = rawDisplay && validDisplayValues.includes(rawDisplay) ? rawDisplay : "summarized";
   return {
     context1M: {
-      enabled: context1MEnabled
+      enabled: context1MEnabled,
+      explicitlySet: context1MExplicitlySet
     },
     inferenceProfiles: {
       preferRegional: preferRegionalInferenceProfiles
@@ -53406,6 +53409,11 @@ class BedrockChatModelProvider {
           if (infos.length === 0) {
             throw new NoAccessibleModelsError;
           }
+          const reconciled = await this.reconcilePersistedContextSelections(infos.map((info) => info.id), settings);
+          if (reconciled) {
+            logger.info("[Bedrock Model Provider] Persisted context selections reconciled; refreshing model info");
+            this.notifyModelInformationChanged("context selection reconciliation");
+          }
           this.chatEndpoints = infos.map((info) => ({
             model: info.id,
             modelMaxPromptTokens: info.maxInputTokens + info.maxOutputTokens
@@ -53537,6 +53545,12 @@ class BedrockChatModelProvider {
       this.logIncomingMessages(messages);
       const settings = await getBedrockSettings(this.globalState);
       const modelProfile = getModelProfile(baseModelId);
+      logger.debug("[Bedrock Model Provider] Incoming modelConfiguration:", {
+        modelConfiguration: options.modelConfiguration ?? "(none)",
+        modelId: model.id,
+        persistedContextSelection: this.getPersistedContextSelection(model.id) ?? "(none)",
+        workspaceContext1MEnabled: settings.context1M.enabled
+      });
       this.applyModelConfigurationOverrides(model.id, settings, options.modelConfiguration);
       const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
       const maxTokensForRequest = typeof options.modelOptions?.max_tokens === "number" ? options.modelOptions.max_tokens : modelLimits.maxOutputTokens;
@@ -53680,7 +53694,49 @@ class BedrockChatModelProvider {
       thinkingEffort: thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined
     });
   }
+  applyContextLengthOverride(modelId, settings, modelConfiguration) {
+    const contextLength = modelConfiguration?.contextLength;
+    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
+      logger.debug("[Bedrock Model Provider] Context-size picker override received", {
+        contextLength,
+        enables1M: contextLength >= 1e6,
+        modelId
+      });
+      settings.context1M.enabled = contextLength >= 1e6;
+      this.setPersistedContextSelection(modelId, contextLength).then((changed) => {
+        if (changed) {
+          this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
+        }
+      }, (error) => {
+        logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
+          error: error instanceof Error ? error.message : String(error),
+          modelId
+        });
+      });
+      return;
+    }
+    if (contextLength !== undefined) {
+      logger.debug("[Bedrock Model Provider] Ignoring non-numeric contextLength override", {
+        contextLength,
+        modelId
+      });
+    }
+    const persisted = this.getPersistedContextSelection(modelId);
+    if (persisted !== undefined) {
+      const enabledFromPicker = persisted >= 1e6;
+      if (enabledFromPicker !== settings.context1M.enabled) {
+        logger.debug("[Bedrock Model Provider] Applying persisted context selection over workspace fallback", {
+          enables1M: enabledFromPicker,
+          modelId,
+          persistedSelection: persisted,
+          workspaceContext1MEnabled: settings.context1M.enabled
+        });
+      }
+      settings.context1M.enabled = enabledFromPicker;
+    }
+  }
   applyModelConfigurationOverrides(modelId, settings, modelConfiguration) {
+    this.applyContextLengthOverride(modelId, settings, modelConfiguration);
     if (!modelConfiguration) {
       return;
     }
@@ -53694,20 +53750,6 @@ class BedrockChatModelProvider {
     const display = modelConfiguration.thinkingDisplay;
     if (display === "summarized" || display === "omitted") {
       settings.thinking.display = display;
-    }
-    const contextLength = modelConfiguration.contextLength;
-    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
-      settings.context1M.enabled = contextLength >= 1e6;
-      this.setPersistedContextSelection(modelId, contextLength).then((changed) => {
-        if (changed) {
-          this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
-        }
-      }, (error) => {
-        logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
-          error: error instanceof Error ? error.message : String(error),
-          modelId
-        });
-      });
     }
   }
   applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
@@ -54312,6 +54354,31 @@ class BedrockChatModelProvider {
       cancellationListener.dispose();
     }
   }
+  async reconcilePersistedContextSelections(advertisedModelIds, settings) {
+    const map = {
+      ...this.globalState.get(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, {})
+    };
+    const advertised = new Set(advertisedModelIds);
+    let changed = false;
+    for (const [modelId, stored] of Object.entries(map)) {
+      const drop = this.shouldDropContextSelection(modelId, stored, advertised, settings);
+      if (drop) {
+        logger.debug("[Bedrock Model Provider] Reconciling stale context selection (dropping)", {
+          modelId,
+          reason: drop,
+          storedValue: stored,
+          workspaceContext1MEnabled: settings.context1M.enabled,
+          workspaceExplicitlySet: settings.context1M.explicitlySet
+        });
+        delete map[modelId];
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, map);
+    }
+    return changed;
+  }
   resolveContext1MEnabled(modelId, fallback) {
     const selection = this.getPersistedContextSelection(modelId);
     return selection === undefined ? fallback : selection >= 1e6;
@@ -54326,6 +54393,26 @@ class BedrockChatModelProvider {
     map[modelId] = totalTokens;
     await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, map);
     return true;
+  }
+  shouldDropContextSelection(modelId, stored, advertised, settings) {
+    if (!advertised.has(modelId)) {
+      return "orphaned (model not advertised)";
+    }
+    const nonManaged = getModelTokenLimits(modelId, false);
+    const managed = getModelTokenLimits(modelId, true);
+    const nonManagedTotal = nonManaged.maxInputTokens + nonManaged.maxOutputTokens;
+    const managedTotal = managed.maxInputTokens + managed.maxOutputTokens;
+    if (nonManagedTotal === managedTotal) {
+      const looksLikeKnownClaude = /anthropic\.claude/i.test(modelId);
+      return looksLikeKnownClaude ? "model window not toggleable" : undefined;
+    }
+    if (stored !== nonManagedTotal && stored !== managedTotal) {
+      return "value not a valid option for model";
+    }
+    if (stored === nonManagedTotal && settings.context1M.enabled && !settings.context1M.explicitlySet) {
+      return "stale non-1M selection overriding default-on 1M window";
+    }
+    return;
   }
   async validateTokenCount(model, requestInput, token) {
     const inputTokenCount = await this.countRequestTokens(model.id, {
@@ -54439,5 +54526,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=9D3FD3DBFC8BDFD064756E2164756E21
+//# debugId=6E87E48DDA87FFD864756E2164756E21
 //# sourceMappingURL=extension.js.map

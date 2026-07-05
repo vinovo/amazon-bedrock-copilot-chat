@@ -22,6 +22,48 @@ const mockGlobalState: vscode.Memento = {
   update: async () => {},
 } as unknown as vscode.Memento;
 
+// Stateful in-memory Memento for tests that need to read back what the provider persisted
+// (e.g. context-selection reconciliation). Backed by a plain record.
+const createStatefulGlobalState = (initial: Record<string, unknown> = {}) => {
+  const store: Record<string, unknown> = { ...initial };
+  const memento: vscode.Memento = {
+    get: (<T>(key: string, defaultValue?: T) =>
+      (store[key] as T | undefined) ?? defaultValue) as vscode.Memento["get"],
+    keys: () => Object.keys(store),
+    update: async (key: string, value: unknown) => {
+      if (value === undefined) {
+        delete store[key];
+      } else {
+        store[key] = value;
+      }
+    },
+  } as unknown as vscode.Memento;
+  return { memento, store };
+};
+
+const CONTEXT_SELECTION_KEY = "bedrock.contextSelection.byModel";
+
+// Build a settings-shaped object with the given 1M defaults for reconciliation tests.
+const makeContextSettings = (enabled: boolean, explicitlySet: boolean) =>
+  ({ context1M: { enabled, explicitlySet } }) as any;
+
+// Run reconcilePersistedContextSelections against a stateful Memento and report what remained.
+const runReconcile = async (
+  stored: Record<string, number>,
+  advertisedModelIds: string[],
+  settings: any,
+): Promise<{ changed: boolean; result: Record<string, number> }> => {
+  const { memento, store } = createStatefulGlobalState({
+    [CONTEXT_SELECTION_KEY]: stored,
+  });
+  const provider = new BedrockChatModelProvider(mockSecretStorage, memento);
+  const changed = (await (provider as any).reconcilePersistedContextSelections(
+    advertisedModelIds,
+    settings,
+  )) as boolean;
+  return { changed, result: store[CONTEXT_SELECTION_KEY] as Record<string, number> };
+};
+
 // Helper to cast non-standard content blocks that may appear from models with extended thinking
 const nonStandardBlock = (b: unknown) => b as any;
 
@@ -88,6 +130,27 @@ const applyConfigOverride = (modelConfiguration: Record<string, unknown> | undef
     context1M: { enabled: boolean };
     thinking: { display: string; effort: string; enabled: boolean };
   };
+};
+
+// Like applyConfigOverride, but backed by a stateful Memento seeded with a persisted per-model
+// context selection, so tests can assert the picker-vs-setting precedence. `workspaceEnabled` is
+// the workspace `bedrock.context1M.enabled` fallback value.
+const applyConfigOverrideWithPersisted = (
+  modelConfiguration: Record<string, unknown> | undefined,
+  persistedSelection: Record<string, number>,
+  workspaceEnabled: boolean,
+  modelId = "global.anthropic.claude-sonnet-5",
+) => {
+  const { memento } = createStatefulGlobalState({
+    [CONTEXT_SELECTION_KEY]: persistedSelection,
+  });
+  const provider = new BedrockChatModelProvider(mockSecretStorage, memento);
+  const settings = {
+    context1M: { enabled: workspaceEnabled, explicitlySet: false },
+    thinking: { display: "summarized", effort: "high", enabled: true },
+  } as any;
+  (provider as any).applyModelConfigurationOverrides(modelId, settings, modelConfiguration);
+  return settings as { context1M: { enabled: boolean } };
 };
 
 suite("Amazon Bedrock Chat Provider Extension", () => {
@@ -1258,6 +1321,159 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     test("non-numeric contextLength value is ignored", () => {
       const settings = applyConfigOverride({ contextLength: "bogus" });
       assert.equal(settings.context1M.enabled, true);
+    });
+  });
+
+  suite("context-size precedence (setting is fallback, never overrides picker)", () => {
+    const sonnet5 = "global.anthropic.claude-sonnet-5";
+
+    test("per-request picker value overrides the workspace setting", () => {
+      // Picker says 200K while the workspace default is on (1M) -> picker wins.
+      const settings = applyConfigOverrideWithPersisted(
+        { contextLength: 200_000 },
+        {}, // no persisted selection yet
+        true, // workspace default on
+        sonnet5,
+      );
+      assert.equal(settings.context1M.enabled, false);
+    });
+
+    test("persisted picker selection wins over the workspace setting when contextLength is absent", () => {
+      // The core fix: VS Code omits contextLength on most turns. The persisted 1M picker choice
+      // must win over a workspace fallback that resolved to off.
+      const settings = applyConfigOverrideWithPersisted(
+        { thinkingEffort: "high" }, // no contextLength on this turn
+        { [sonnet5]: 1_000_000 },
+        false, // workspace fallback OFF
+        sonnet5,
+      );
+      assert.equal(settings.context1M.enabled, true);
+    });
+
+    test("persisted 200K selection wins over a workspace setting that is on", () => {
+      const settings = applyConfigOverrideWithPersisted(
+        undefined, // no modelConfiguration at all
+        { [sonnet5]: 200_000 },
+        true, // workspace fallback ON
+        sonnet5,
+      );
+      assert.equal(settings.context1M.enabled, false);
+    });
+
+    test("falls back to the workspace setting when there is no persisted selection", () => {
+      const settings = applyConfigOverrideWithPersisted(
+        { thinkingEffort: "low" }, // no contextLength
+        {}, // nothing persisted
+        true, // workspace fallback ON
+        sonnet5,
+      );
+      assert.equal(settings.context1M.enabled, true);
+    });
+
+    test("resolves context even when modelConfiguration is undefined", () => {
+      // The early-return-on-undefined path must still apply the persisted selection.
+      const settings = applyConfigOverrideWithPersisted(
+        undefined,
+        { [sonnet5]: 1_000_000 },
+        false,
+        sonnet5,
+      );
+      assert.equal(settings.context1M.enabled, true);
+    });
+  });
+
+  suite("context selection reconciliation (self-heal)", () => {
+    const sonnet5 = "global.anthropic.claude-sonnet-5";
+
+    test("drops a stale 200K selection that silently overrides a default-on 1M window", async () => {
+      // The exact bug: persisted 200K for Sonnet 5 while the workspace default (1M) is on and the
+      // user never explicitly configured it. Reconciliation must clear it so the default applies.
+      const { changed, result } = await runReconcile(
+        { [sonnet5]: 200_000 },
+        [sonnet5],
+        makeContextSettings(true, false),
+      );
+      assert.equal(changed, true);
+      assert.equal(result[sonnet5], undefined);
+    });
+
+    test("keeps a 200K selection when the user explicitly turned the 1M default off", async () => {
+      // If the user explicitly set bedrock.context1M.enabled=false, a 200K per-model choice is
+      // consistent with intent and must be preserved.
+      const { changed, result } = await runReconcile(
+        { [sonnet5]: 200_000 },
+        [sonnet5],
+        makeContextSettings(false, true),
+      );
+      assert.equal(changed, false);
+      assert.equal(result[sonnet5], 200_000);
+    });
+
+    test("keeps a 200K selection when the user explicitly enabled 1M (explicit override)", async () => {
+      // Explicitly-set workspace value means the per-model selection is authoritative for that
+      // model regardless; we only heal the *implicit* default-on case.
+      const { changed, result } = await runReconcile(
+        { [sonnet5]: 200_000 },
+        [sonnet5],
+        makeContextSettings(true, true),
+      );
+      assert.equal(changed, false);
+      assert.equal(result[sonnet5], 200_000);
+    });
+
+    test("keeps a legitimate 1M selection", async () => {
+      const { changed, result } = await runReconcile(
+        { [sonnet5]: 1_000_000 },
+        [sonnet5],
+        makeContextSettings(true, false),
+      );
+      assert.equal(changed, false);
+      assert.equal(result[sonnet5], 1_000_000);
+    });
+
+    test("drops an orphaned selection for a model that is no longer advertised", async () => {
+      const { changed, result } = await runReconcile(
+        { [sonnet5]: 1_000_000 },
+        [], // nothing advertised
+        makeContextSettings(true, false),
+      );
+      assert.equal(changed, true);
+      assert.equal(result[sonnet5], undefined);
+    });
+
+    test("drops a selection whose value is not a valid option for the model", async () => {
+      const { changed, result } = await runReconcile(
+        { [sonnet5]: 512_345 },
+        [sonnet5],
+        makeContextSettings(true, false),
+      );
+      assert.equal(changed, true);
+      assert.equal(result[sonnet5], undefined);
+    });
+
+    test("drops a selection for a recognized fixed-window model (no toggle)", async () => {
+      // Opus 4.5 has a single fixed 200K window — a persisted selection makes no sense.
+      const opus45 = "global.anthropic.claude-opus-4-5-20251101-v1:0";
+      const { changed, result } = await runReconcile(
+        { [opus45]: 200_000 },
+        [opus45],
+        makeContextSettings(true, false),
+      );
+      assert.equal(changed, true);
+      assert.equal(result[opus45], undefined);
+    });
+
+    test("leaves unresolvable ids (e.g. app-profile ARNs) untouched when still advertised", async () => {
+      // ARNs fall back to default limits (non-toggleable heuristic) but must not be dropped just
+      // because we cannot resolve their family — only true orphans are removed.
+      const arn = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/my-profile";
+      const { changed, result } = await runReconcile(
+        { [arn]: 1_000_000 },
+        [arn],
+        makeContextSettings(true, false),
+      );
+      assert.equal(changed, false);
+      assert.equal(result[arn], 1_000_000);
     });
   });
 });
