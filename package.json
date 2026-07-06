@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/vinovo/amazon-bedrock-copilot-chat"
   },
-  "version": "0.15.1",
+  "version": "0.15.2",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -85,16 +85,20 @@
           "type": "string",
           "default": "high",
           "enum": [
+            "max",
+            "xhigh",
             "high",
             "medium",
             "low"
           ],
           "enumDescriptions": [
+            "Absolute maximum capability with no constraints on token spending. Available on Opus 4.6/4.7/4.8, Sonnet 4.6, Sonnet 5.",
+            "Extended capability for long-horizon agentic and coding work. Available on Opus 4.7/4.8, Sonnet 5 (not Opus 4.6 or Sonnet 4.6).",
             "Maximum capability—Claude uses as many tokens as needed for the best possible outcome. Recommended for complex reasoning and difficult coding problems.",
             "Balanced approach with moderate token savings. Good for tasks requiring a balance of speed, cost, and performance.",
             "Most efficient—significant token savings with some capability reduction. Best for simpler tasks that need speed and lowest costs."
           ],
-          "description": "Fallback thinking effort level for effort-capable Claude models (e.g. Opus 4.8/4.6/4.5, Sonnet 5, Sonnet 4.6/4.5, Haiku 4.5). This is only used when the model picker does NOT provide a per-model 'Thinking Effort' selection — the picker's per-model value always takes precedence over this setting.",
+          "description": "Fallback thinking effort level for effort-capable Claude models (e.g. Opus 4.8/4.7/4.6/4.5, Sonnet 5, Sonnet 4.6/4.5, Haiku 4.5). This is only used when the model picker does NOT provide a per-model 'Thinking Effort' selection — the picker's per-model value always takes precedence over this setting. Note: 'xhigh' is only accepted by Opus 4.7/4.8 and Sonnet 5; it will be ignored by other models.",
           "scope": "resource"
         },
         "bedrock.thinking.display": {

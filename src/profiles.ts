@@ -2,6 +2,8 @@
  * Model profile system for handling provider-specific capabilities
  */
 
+import type { ThinkingEffort } from "./settings";
+
 export interface ModelProfile {
   /**
    * Whether the model should PREFER adaptive thinking (thinking.type: "adaptive") over manual
@@ -16,6 +18,16 @@ export interface ModelProfile {
    * Whether the model requires the interleaved-thinking beta header (Claude 4 models only)
    */
   requiresInterleavedThinkingHeader: boolean;
+  /**
+   * Ordered list of effort levels the model accepts via `output_config.effort`.
+   * An empty array means the model does not support the effort parameter at all.
+   * The ordering matches the picker display (highest first: max → xhigh → high → medium → low).
+   * Not all models support all levels:
+   *   - Opus 4.8 / Opus 4.7 / Sonnet 5: max, xhigh, high, medium, low
+   *   - Opus 4.6 / Sonnet 4.6:           max, high, medium, low  (no xhigh)
+   *   - Opus 4.5 / Sonnet 4.5 / Haiku 4.5: high, medium, low
+   */
+  supportedThinkingEfforts: readonly ThinkingEffort[];
   /**
    * Whether the model supports 1M context window
    */
@@ -51,11 +63,6 @@ export interface ModelProfile {
    */
   supportsThinkingDisplay: boolean;
   /**
-   * Whether the model supports the adaptive thinking / thinking effort parameter (Claude Opus 4.6, Opus 4.5, Sonnet 4.6)
-   * Allows controlling token expenditure with "high", "medium", or "low" effort levels
-   */
-  supportsThinkingEffort: boolean;
-  /**
    * Whether the model supports the toolChoice parameter
    */
   supportsToolChoice: boolean;
@@ -86,13 +93,13 @@ export function getModelProfile(modelId: string): ModelProfile {
   const defaultProfile: ModelProfile = {
     prefersAdaptiveThinking: false,
     requiresInterleavedThinkingHeader: false,
+    supportedThinkingEfforts: [],
     supports1MContext: false,
     supportsAdaptiveThinkingOnly: false,
     supportsCachingWithToolResults: false,
     supportsPromptCaching: false,
     supportsThinking: false,
     supportsThinkingDisplay: false,
-    supportsThinkingEffort: false,
     supportsToolChoice: false,
     supportsToolResultStatus: false,
     toolResultFormat: "text",
@@ -124,13 +131,13 @@ export function getModelProfile(modelId: string): ModelProfile {
         return {
           prefersAdaptiveThinking: false,
           requiresInterleavedThinkingHeader: false,
+          supportedThinkingEfforts: [],
           supports1MContext: false,
           supportsAdaptiveThinkingOnly: false,
           supportsCachingWithToolResults: false,
           supportsPromptCaching: true,
           supportsThinking: false,
           supportsThinkingDisplay: false,
-          supportsThinkingEffort: false,
           supportsToolChoice: true,
           supportsToolResultStatus: false,
           toolResultFormat: "text",
@@ -146,13 +153,13 @@ export function getModelProfile(modelId: string): ModelProfile {
       return {
         prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
+        supportedThinkingEfforts: [],
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
         supportsThinkingDisplay: false,
-        supportsThinkingEffort: false,
         supportsToolChoice: false,
         supportsToolResultStatus: false,
         toolResultFormat: "json",
@@ -164,13 +171,13 @@ export function getModelProfile(modelId: string): ModelProfile {
       return {
         prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
+        supportedThinkingEfforts: [],
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
         supportsThinkingDisplay: false,
-        supportsThinkingEffort: false,
         supportsToolChoice: true,
         supportsToolResultStatus: false,
         toolResultFormat: "text",
@@ -260,30 +267,46 @@ function getAnthropicProfile(modelId: string): ModelProfile {
   // thinking models. "omitted" suppresses streamed thinking text for faster time-to-first-token.
   const supportsThinkingDisplay = supportsThinking;
 
-  // Adaptive thinking / thinking effort parameter is supported by Claude Opus 4.8, Opus 4.6,
-  // Opus 4.5, Sonnet 5, Sonnet 4.6, Sonnet 4.5, and Haiku 4.5.
-  // Allows controlling token expenditure with "high", "medium", or "low" effort levels.
-  // On Opus 4.8 and Sonnet 5 the `effort` parameter defaults to "high"; explicit values override it.
-  const supportsThinkingEffort =
+  // Adaptive thinking / thinking effort parameter support.
+  // Each model supports a specific subset of effort levels:
+  //   - Opus 4.8 / Opus 4.7 / Sonnet 5: max, xhigh, high, medium, low
+  //   - Opus 4.6 / Sonnet 4.6:           max, high, medium, low  (no xhigh)
+  //   - Opus 4.5 / Sonnet 4.5 / Haiku 4.5: high, medium, low
+  // Ordered highest-to-lowest for the picker display.
+  const ALL_EFFORTS: readonly ThinkingEffort[] = ["max", "xhigh", "high", "medium", "low"];
+  const NO_XHIGH_EFFORTS: readonly ThinkingEffort[] = ["max", "high", "medium", "low"];
+  const BASIC_EFFORTS: readonly ThinkingEffort[] = ["high", "medium", "low"];
+
+  let supportedThinkingEfforts: readonly ThinkingEffort[];
+  if (
     modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4-6") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("sonnet-5")
+  ) {
+    supportedThinkingEfforts = ALL_EFFORTS; // max, xhigh, high, medium, low
+  } else if (modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6")) {
+    supportedThinkingEfforts = NO_XHIGH_EFFORTS; // max, high, medium, low
+  } else if (
     modelId.includes("opus-4-5") ||
-    modelId.includes("sonnet-5") ||
-    modelId.includes("sonnet-4-6") ||
     modelId.includes("sonnet-4-5") ||
     modelId.includes("haiku-4-5") ||
-    modelId.includes("haiku-4.5");
+    modelId.includes("haiku-4.5")
+  ) {
+    supportedThinkingEfforts = BASIC_EFFORTS; // high, medium, low
+  } else {
+    supportedThinkingEfforts = [];
+  }
 
   return {
     prefersAdaptiveThinking,
     requiresInterleavedThinkingHeader,
+    supportedThinkingEfforts,
     supports1MContext: supports1MContext(modelId),
     supportsAdaptiveThinkingOnly,
     supportsCachingWithToolResults,
     supportsPromptCaching: true,
     supportsThinking,
     supportsThinkingDisplay,
-    supportsThinkingEffort,
     supportsToolChoice: true,
     supportsToolResultStatus: true, // Claude models support status field in tool results
     toolResultFormat: "text",

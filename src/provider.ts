@@ -23,7 +23,7 @@ import { convertMessages, stripThinkingContent } from "./converters/messages";
 import { convertTools } from "./converters/tools";
 import { logger } from "./logger";
 import { getModelProfile, getModelTokenLimits } from "./profiles";
-import { getBedrockSettings } from "./settings";
+import { getBedrockSettings, type ThinkingDisplay, type ThinkingEffort } from "./settings";
 import { StreamProcessor, type ThinkingBlock } from "./stream-processor";
 import { countMessageTokens, countStringTokens } from "./tokenizer";
 import type { AuthConfig, AuthMethod, BedrockModelSummary } from "./types";
@@ -51,18 +51,6 @@ type BedrockLanguageModelChatInformation = LanguageModelChatInformation & {
   readonly category?: { label: string; order: number };
   readonly isUserSelectable?: boolean;
 };
-
-/**
- * Thinking display mode passed via `thinking.display` for Claude extended thinking.
- * "omitted" suppresses streamed thinking text (faster time-to-first-token).
- */
-type ThinkingDisplay = "omitted" | "summarized";
-
-/**
- * Effort level passed via `output_config.effort` for adaptive thinking and Claude
- * effort-aware models. See https://platform.claude.com/docs/en/build-with-claude/effort
- */
-type ThinkingEffort = "high" | "low" | "medium";
 
 class NoAccessibleModelsError extends Error {
   constructor() {
@@ -784,8 +772,8 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         throw new Error("Cannot have more than 128 tools per request.");
       }
 
-      // Determine if thinking effort should be applied (only for Opus 4.5 and Sonnet 4.6)
-      const thinkingEffortEnabled = modelProfile.supportsThinkingEffort;
+      // Determine if thinking effort should be applied for this model
+      const thinkingEffortEnabled = modelProfile.supportedThinkingEfforts.length > 0;
 
       // Build beta headers
       const betaHeaders = this.buildBetaHeaders(
@@ -1013,7 +1001,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         ...(includeDisplay ? { display: thinkingDisplay } : {}),
       },
       ...(betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {}),
-      ...(thinkingEffort && modelProfile.supportsThinkingEffort
+      ...(thinkingEffort && modelProfile.supportedThinkingEfforts.length > 0
         ? { output_config: { effort: thinkingEffort } }
         : {}),
     };
@@ -1022,7 +1010,9 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       modelId,
       thinkingDisplay: includeDisplay ? thinkingDisplay : undefined,
       thinkingEffort:
-        thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined,
+        thinkingEffort && modelProfile.supportedThinkingEfforts.length > 0
+          ? thinkingEffort
+          : undefined,
     });
   }
 
@@ -1133,7 +1123,13 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     }
 
     const effort = modelConfiguration.thinkingEffort;
-    if (effort === "high" || effort === "medium" || effort === "low") {
+    if (
+      effort === "high" ||
+      effort === "medium" ||
+      effort === "low" ||
+      effort === "max" ||
+      effort === "xhigh"
+    ) {
       settings.thinking.effort = effort;
     }
 
@@ -1383,22 +1379,55 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         }
       : undefined;
 
-    const thinkingEffort: SchemaProperty | undefined = profile.supportsThinkingEffort
-      ? {
-          default: "high",
-          description: "Thinking effort level.",
-          enum: ["high", "medium", "low"],
-          enumDescriptions: [
-            "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
-            "Balanced approach with moderate token savings.",
-            "Most efficient — significant token savings with some capability reduction.",
-          ],
-          enumItemLabels: ["High", "Medium", "Low"],
-          // `group: "navigation"` surfaces this as the dedicated picker button (UBB mode).
-          group: "navigation",
-          type: "string",
-        }
-      : undefined;
+    const thinkingEffort: SchemaProperty | undefined =
+      profile.supportedThinkingEfforts.length > 0
+        ? {
+            default: "high",
+            description: "Thinking effort level.",
+            enum: profile.supportedThinkingEfforts as ThinkingEffort[],
+            enumDescriptions: profile.supportedThinkingEfforts.map((e) => {
+              switch (e) {
+                case "high": {
+                  return "Maximum capability — Claude uses as many tokens as needed for the best outcome.";
+                }
+                case "low": {
+                  return "Most efficient — significant token savings with some capability reduction.";
+                }
+                case "max": {
+                  return "Absolute maximum capability with no constraints on token spending.";
+                }
+                case "medium": {
+                  return "Balanced approach with moderate token savings.";
+                }
+                case "xhigh": {
+                  return "Extended capability for long-horizon agentic and coding work.";
+                }
+              }
+            }),
+            enumItemLabels: profile.supportedThinkingEfforts.map((e) => {
+              switch (e) {
+                case "high": {
+                  return "High";
+                }
+                case "low": {
+                  return "Low";
+                }
+                case "max": {
+                  return "Max";
+                }
+                case "medium": {
+                  return "Medium";
+                }
+                case "xhigh": {
+                  return "Extra High";
+                }
+              }
+            }),
+            // `group: "navigation"` surfaces this as the dedicated picker button (UBB mode).
+            group: "navigation",
+            type: "string",
+          }
+        : undefined;
 
     const thinkingDisplay: SchemaProperty | undefined = profile.supportsThinkingDisplay
       ? {

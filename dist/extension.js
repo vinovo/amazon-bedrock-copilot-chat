@@ -50991,7 +50991,7 @@ async function getBedrockSettings(globalState) {
   const copilotThinkingMaxTokens = copilotConfig.get("thinking.maxTokens");
   const thinkingEnabled = copilotThinkingEnabled ?? config.get("thinking.enabled") ?? true;
   const thinkingBudgetTokens = copilotThinkingMaxTokens ?? config.get("thinking.budgetTokens") ?? 1e4;
-  const validEffortValues = ["high", "low", "medium"];
+  const validEffortValues = ["high", "low", "max", "medium", "xhigh"];
   const rawEffort = config.get("thinking.effort");
   const thinkingEffort = rawEffort && validEffortValues.includes(rawEffort) ? rawEffort : "high";
   const validDisplayValues = ["omitted", "summarized"];
@@ -52073,13 +52073,13 @@ function getModelProfile(modelId) {
   const defaultProfile = {
     prefersAdaptiveThinking: false,
     requiresInterleavedThinkingHeader: false,
+    supportedThinkingEfforts: [],
     supports1MContext: false,
     supportsAdaptiveThinkingOnly: false,
     supportsCachingWithToolResults: false,
     supportsPromptCaching: false,
     supportsThinking: false,
     supportsThinkingDisplay: false,
-    supportsThinkingEffort: false,
     supportsToolChoice: false,
     supportsToolResultStatus: false,
     toolResultFormat: "text"
@@ -52101,13 +52101,13 @@ function getModelProfile(modelId) {
         return {
           prefersAdaptiveThinking: false,
           requiresInterleavedThinkingHeader: false,
+          supportedThinkingEfforts: [],
           supports1MContext: false,
           supportsAdaptiveThinkingOnly: false,
           supportsCachingWithToolResults: false,
           supportsPromptCaching: true,
           supportsThinking: false,
           supportsThinkingDisplay: false,
-          supportsThinkingEffort: false,
           supportsToolChoice: true,
           supportsToolResultStatus: false,
           toolResultFormat: "text"
@@ -52122,13 +52122,13 @@ function getModelProfile(modelId) {
       return {
         prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
+        supportedThinkingEfforts: [],
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
         supportsThinkingDisplay: false,
-        supportsThinkingEffort: false,
         supportsToolChoice: false,
         supportsToolResultStatus: false,
         toolResultFormat: "json"
@@ -52138,13 +52138,13 @@ function getModelProfile(modelId) {
       return {
         prefersAdaptiveThinking: false,
         requiresInterleavedThinkingHeader: false,
+        supportedThinkingEfforts: [],
         supports1MContext: false,
         supportsAdaptiveThinkingOnly: false,
         supportsCachingWithToolResults: false,
         supportsPromptCaching: false,
         supportsThinking: false,
         supportsThinkingDisplay: false,
-        supportsThinkingEffort: false,
         supportsToolChoice: true,
         supportsToolResultStatus: false,
         toolResultFormat: "text"
@@ -52175,17 +52175,29 @@ function getAnthropicProfile(modelId) {
   const supportsAdaptiveThinkingOnly = modelId.includes("opus-4-8") || modelId.includes("opus-4-7") || modelId.includes("sonnet-5");
   const prefersAdaptiveThinking = supportsAdaptiveThinkingOnly || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6");
   const supportsThinkingDisplay = supportsThinking;
-  const supportsThinkingEffort = modelId.includes("opus-4-8") || modelId.includes("opus-4-6") || modelId.includes("opus-4-5") || modelId.includes("sonnet-5") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-4-5") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5");
+  const ALL_EFFORTS = ["max", "xhigh", "high", "medium", "low"];
+  const NO_XHIGH_EFFORTS = ["max", "high", "medium", "low"];
+  const BASIC_EFFORTS = ["high", "medium", "low"];
+  let supportedThinkingEfforts;
+  if (modelId.includes("opus-4-8") || modelId.includes("opus-4-7") || modelId.includes("sonnet-5")) {
+    supportedThinkingEfforts = ALL_EFFORTS;
+  } else if (modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6")) {
+    supportedThinkingEfforts = NO_XHIGH_EFFORTS;
+  } else if (modelId.includes("opus-4-5") || modelId.includes("sonnet-4-5") || modelId.includes("haiku-4-5") || modelId.includes("haiku-4.5")) {
+    supportedThinkingEfforts = BASIC_EFFORTS;
+  } else {
+    supportedThinkingEfforts = [];
+  }
   return {
     prefersAdaptiveThinking,
     requiresInterleavedThinkingHeader,
+    supportedThinkingEfforts,
     supports1MContext: supports1MContext(modelId),
     supportsAdaptiveThinkingOnly,
     supportsCachingWithToolResults,
     supportsPromptCaching: true,
     supportsThinking,
     supportsThinkingDisplay,
-    supportsThinkingEffort,
     supportsToolChoice: true,
     supportsToolResultStatus: true,
     toolResultFormat: "text"
@@ -53578,7 +53590,7 @@ class BedrockChatModelProvider {
       if (options.tools && options.tools.length > 128) {
         throw new Error("Cannot have more than 128 tools per request.");
       }
-      const thinkingEffortEnabled = modelProfile.supportsThinkingEffort;
+      const thinkingEffortEnabled = modelProfile.supportedThinkingEfforts.length > 0;
       const betaHeaders = this.buildBetaHeaders(modelProfile, extendedThinkingEnabled, settings.context1M.enabled, thinkingEffortEnabled);
       const requestInput = this.buildRequestInput(model, modelProfile, converted, options, toolConfig, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffortEnabled ? settings.thinking.effort : undefined, modelProfile.supportsThinkingDisplay ? settings.thinking.display : undefined);
       this.logRequestDetails(requestInput);
@@ -53685,13 +53697,13 @@ class BedrockChatModelProvider {
         ...includeDisplay ? { display: thinkingDisplay } : {}
       },
       ...betaHeaders.length > 0 ? { anthropic_beta: betaHeaders } : {},
-      ...thinkingEffort && modelProfile.supportsThinkingEffort ? { output_config: { effort: thinkingEffort } } : {}
+      ...thinkingEffort && modelProfile.supportedThinkingEfforts.length > 0 ? { output_config: { effort: thinkingEffort } } : {}
     };
     logger.debug("[Bedrock Model Provider] Adaptive thinking enabled", {
       anthropicBeta: betaHeaders.length > 0 ? betaHeaders : undefined,
       modelId,
       thinkingDisplay: includeDisplay ? thinkingDisplay : undefined,
-      thinkingEffort: thinkingEffort && modelProfile.supportsThinkingEffort ? thinkingEffort : undefined
+      thinkingEffort: thinkingEffort && modelProfile.supportedThinkingEfforts.length > 0 ? thinkingEffort : undefined
     });
   }
   applyContextLengthOverride(modelId, settings, modelConfiguration) {
@@ -53744,7 +53756,7 @@ class BedrockChatModelProvider {
       settings.thinking.enabled = modelConfiguration.thinkingEnabled;
     }
     const effort = modelConfiguration.thinkingEffort;
-    if (effort === "high" || effort === "medium" || effort === "low") {
+    if (effort === "high" || effort === "medium" || effort === "low" || effort === "max" || effort === "xhigh") {
       settings.thinking.effort = effort;
     }
     const display = modelConfiguration.thinkingDisplay;
@@ -53874,16 +53886,48 @@ class BedrockChatModelProvider {
       description: "Enable extended thinking for this model.",
       type: "boolean"
     } : undefined;
-    const thinkingEffort = profile.supportsThinkingEffort ? {
+    const thinkingEffort = profile.supportedThinkingEfforts.length > 0 ? {
       default: "high",
       description: "Thinking effort level.",
-      enum: ["high", "medium", "low"],
-      enumDescriptions: [
-        "Maximum capability — Claude uses as many tokens as needed for the best outcome.",
-        "Balanced approach with moderate token savings.",
-        "Most efficient — significant token savings with some capability reduction."
-      ],
-      enumItemLabels: ["High", "Medium", "Low"],
+      enum: profile.supportedThinkingEfforts,
+      enumDescriptions: profile.supportedThinkingEfforts.map((e) => {
+        switch (e) {
+          case "high": {
+            return "Maximum capability — Claude uses as many tokens as needed for the best outcome.";
+          }
+          case "low": {
+            return "Most efficient — significant token savings with some capability reduction.";
+          }
+          case "max": {
+            return "Absolute maximum capability with no constraints on token spending.";
+          }
+          case "medium": {
+            return "Balanced approach with moderate token savings.";
+          }
+          case "xhigh": {
+            return "Extended capability for long-horizon agentic and coding work.";
+          }
+        }
+      }),
+      enumItemLabels: profile.supportedThinkingEfforts.map((e) => {
+        switch (e) {
+          case "high": {
+            return "High";
+          }
+          case "low": {
+            return "Low";
+          }
+          case "max": {
+            return "Max";
+          }
+          case "medium": {
+            return "Medium";
+          }
+          case "xhigh": {
+            return "Extra High";
+          }
+        }
+      }),
       group: "navigation",
       type: "string"
     } : undefined;
@@ -54526,5 +54570,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=6E87E48DDA87FFD864756E2164756E21
+//# debugId=D4606910E5D6CA0A64756E2164756E21
 //# sourceMappingURL=extension.js.map

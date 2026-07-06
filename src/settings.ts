@@ -47,13 +47,19 @@ export interface BedrockSettings {
 export type ThinkingDisplay = "omitted" | "summarized";
 
 /**
- * Thinking effort level for Claude Opus 4.5 and Sonnet 4.6.
- * Controls how eager Claude is about spending tokens when responding.
- * - "high": Maximum capability—Claude uses as many tokens as needed for the best possible outcome
- * - "medium": Balanced approach with moderate token savings
- * - "low": Most efficient—significant token savings with some capability reduction
+ * Thinking effort level for effort-capable Claude models.
+ * Passed as `output_config.effort` in the Bedrock Converse API.
+ * Not all models support all levels — see {@link ModelProfile.supportedThinkingEfforts}.
+ *
+ * - "max":   Absolute maximum capability with no constraints on token spending.
+ *            Available on Opus 4.6/4.7/4.8, Sonnet 4.6, Sonnet 5.
+ * - "xhigh": Extended capability for long-horizon agentic and coding work.
+ *            Available on Opus 4.7/4.8, Sonnet 5 (NOT Opus 4.6 or Sonnet 4.6).
+ * - "high":  High capability. Equivalent to omitting the parameter (server default).
+ * - "medium": Balanced approach with moderate token savings.
+ * - "low":   Most efficient — significant token savings with some capability reduction.
  */
-export type ThinkingEffort = "high" | "low" | "medium";
+export type ThinkingEffort = "high" | "low" | "max" | "medium" | "xhigh";
 
 /**
  * Get Bedrock settings with priority order
@@ -124,9 +130,8 @@ export async function getBedrockSettings(globalState: vscode.Memento): Promise<B
   const thinkingBudgetTokens =
     copilotThinkingMaxTokens ?? config.get<number>("thinking.budgetTokens") ?? 10_000;
 
-  // Read thinking effort setting (only for Claude Opus 4.5 and Sonnet 4.6)
-  // Default to "high" for maximum capability
-  const validEffortValues: ThinkingEffort[] = ["high", "low", "medium"];
+  // Read thinking effort setting. Default to "high" for maximum capability.
+  const validEffortValues: ThinkingEffort[] = ["high", "low", "max", "medium", "xhigh"];
   const rawEffort = config.get<string>("thinking.effort");
   const thinkingEffort: ThinkingEffort =
     rawEffort && validEffortValues.includes(rawEffort as ThinkingEffort)

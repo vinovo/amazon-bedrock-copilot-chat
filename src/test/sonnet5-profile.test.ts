@@ -31,8 +31,12 @@ suite("Claude Sonnet 5", () => {
         assert.equal(profile.prefersAdaptiveThinking, true, "prefersAdaptiveThinking");
         assert.equal(profile.supportsThinking, true, "supportsThinking");
 
-        // Effort parameter is supported (defaults to "high").
-        assert.equal(profile.supportsThinkingEffort, true, "supportsThinkingEffort");
+        // Effort parameter is supported with max, xhigh, high, medium, low (Sonnet 5 supports all 5 levels).
+        assert.deepEqual(
+          profile.supportedThinkingEfforts,
+          ["max", "xhigh", "high", "medium", "low"],
+          "supportedThinkingEfforts",
+        );
 
         // Toggleable 1M context.
         assert.equal(profile.supports1MContext, true, "supports1MContext");
