@@ -12,15 +12,6 @@ import { getProfileRegion } from "./aws-profiles";
  */
 
 export interface BedrockSettings {
-  context1M: {
-    enabled: boolean;
-    /**
-     * Whether the user explicitly configured `bedrock.context1M.enabled` (in workspace or user
-     * settings) rather than falling back to the built-in default. When `false`, `enabled` reflects
-     * the default and callers may treat a persisted per-model picker selection as authoritative.
-     */
-    explicitlySet: boolean;
-  };
   inferenceProfiles: {
     preferRegional: boolean;
   };
@@ -105,14 +96,6 @@ export async function getBedrockSettings(globalState: vscode.Memento): Promise<B
     preferredModel = preferredModelInspect.globalValue ?? undefined;
   }
 
-  // Read 1M context settings with defaults (enabled by default)
-  const context1MInspect = config.inspect<boolean>("context1M.enabled");
-  const context1MExplicitlySet =
-    context1MInspect?.workspaceFolderValue !== undefined ||
-    context1MInspect?.workspaceValue !== undefined ||
-    context1MInspect?.globalValue !== undefined;
-  const context1MEnabled = config.get<boolean>("context1M.enabled") ?? true;
-
   // Read prompt caching settings with defaults (enabled by default)
   const promptCachingEnabled = config.get<boolean>("promptCaching.enabled") ?? true;
 
@@ -147,10 +130,6 @@ export async function getBedrockSettings(globalState: vscode.Memento): Promise<B
       : "summarized";
 
   return {
-    context1M: {
-      enabled: context1MEnabled,
-      explicitlySet: context1MExplicitlySet,
-    },
     inferenceProfiles: {
       preferRegional: preferRegionalInferenceProfiles,
     },

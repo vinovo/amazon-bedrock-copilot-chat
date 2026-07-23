@@ -314,14 +314,33 @@ function getAnthropicProfile(modelId: string): ModelProfile {
 }
 
 /**
+ * Reserve output tokens the way GitHub Copilot does: cap the response reservation at
+ * `min(model's native max output, 15% of the context window)`, then give the remainder to the
+ * prompt. This mirrors Copilot's model-metadata hydration (vscode-copilot-chat
+ * `modelMetadataFetcher._hydrateResolvedModel`), preventing a large native output ceiling
+ * (e.g. 128K for Opus 4.8) from eating most of a 200K context window.
+ *
+ * @example copilotAlignedLimits(200_000, 128_000)   → { maxInputTokens: 170_000, maxOutputTokens: 30_000 }
+ * @example copilotAlignedLimits(1_000_000, 128_000) → { maxInputTokens: 872_000, maxOutputTokens: 128_000 }
+ */
+function copilotAlignedLimits(contextWindow: number, nativeMaxOutput: number): ModelTokenLimits {
+  const reserve = Math.floor(Math.min(nativeMaxOutput, contextWindow * 0.15));
+  return { maxInputTokens: contextWindow - reserve, maxOutputTokens: reserve };
+}
+
+/**
  * Get token limits for a Claude model based on its normalized model ID
  */
 function getClaudeTokenLimits(
   normalizedModelId: string,
   enable1MContext: boolean,
 ): ModelTokenLimits {
+  // Native output ceilings below feed Copilot's 15%-of-context reservation via
+  // `copilotAlignedLimits`. At a 200K window the reserve collapses to 30K (15%) for every
+  // model whose native output exceeds 30K; at 1M it uses the native ceiling (15% = 150K > 128K).
+
   // Claude Opus 4.8, Opus 4.7, and Sonnet 5: 200K default context (or 1M with the
-  // `context-1m-2025-08-07` beta enabled), 128K max output. The model card headlines a 1M
+  // `context-1m-2025-08-07` beta enabled), 128K native output. The model card headlines a 1M
   // context window, but — like the official Claude Code CLI — the *effective* window defaults
   // to 200K and opts into 1M via the beta header (Claude Code does this with the `opus[1m]`
   // model-string suffix). temperature/top_p/top_k unsupported; adaptive thinking only.
@@ -334,74 +353,62 @@ function getClaudeTokenLimits(
     normalizedModelId.includes("opus-4-7") ||
     normalizedModelId.includes("sonnet-5")
   ) {
-    return {
-      maxInputTokens: (enable1MContext ? 1_000_000 : 200_000) - 128_000,
-      maxOutputTokens: 128_000,
-    };
+    return copilotAlignedLimits(enable1MContext ? 1_000_000 : 200_000, 128_000);
   }
 
-  // Claude Opus 4.6: 200K context (or 1M with setting enabled), 128K max output
+  // Claude Opus 4.6: 200K context (or 1M with setting enabled), 128K native output
   // https://platform.claude.com - Opus 4.6 supports 128K output and optional 1M context
   if (normalizedModelId.includes("opus-4-6")) {
-    return {
-      maxInputTokens: (enable1MContext ? 1_000_000 : 200_000) - 128_000,
-      maxOutputTokens: 128_000,
-    };
+    return copilotAlignedLimits(enable1MContext ? 1_000_000 : 200_000, 128_000);
   }
 
-  // Claude Sonnet 4.6: 200K context (or 1M with setting enabled), 64K output
+  // Claude Sonnet 4.6: 200K context (or 1M with setting enabled), 64K native output
   if (normalizedModelId.includes("sonnet-4-6")) {
-    return {
-      maxInputTokens: (enable1MContext ? 1_000_000 : 200_000) - 64_000,
-      maxOutputTokens: 64_000,
-    };
+    return copilotAlignedLimits(enable1MContext ? 1_000_000 : 200_000, 64_000);
   }
 
-  // Claude Sonnet 4.5 and 4: 200K context (or 1M with setting enabled), 64K output
+  // Claude Sonnet 4.5 and 4: 200K context (or 1M with setting enabled), 64K native output
   if (normalizedModelId.includes("sonnet-4")) {
-    return {
-      maxInputTokens: (enable1MContext ? 1_000_000 : 200_000) - 64_000,
-      maxOutputTokens: 64_000,
-    };
+    return copilotAlignedLimits(enable1MContext ? 1_000_000 : 200_000, 64_000);
   }
 
-  // Claude Sonnet 3.7: 200K context, 64K output
+  // Claude Sonnet 3.7: 200K context, 64K native output
   if (normalizedModelId.includes("sonnet-3-7") || normalizedModelId.includes("sonnet-3.7")) {
-    return { maxInputTokens: 200_000 - 64_000, maxOutputTokens: 64_000 };
+    return copilotAlignedLimits(200_000, 64_000);
   }
 
-  // Claude Opus 4.5, 4.1 and 4: 200K context, 64K output
+  // Claude Opus 4.5, 4.1 and 4: 200K context, 64K native output
   if (normalizedModelId.includes("opus-4")) {
-    return { maxInputTokens: 200_000 - 64_000, maxOutputTokens: 64_000 };
+    return copilotAlignedLimits(200_000, 64_000);
   }
 
-  // Claude Haiku 4.5: 200K context, 64K output
+  // Claude Haiku 4.5: 200K context, 64K native output
   if (normalizedModelId.includes("haiku-4-5") || normalizedModelId.includes("haiku-4.5")) {
-    return { maxInputTokens: 200_000 - 64_000, maxOutputTokens: 64_000 };
+    return copilotAlignedLimits(200_000, 64_000);
   }
 
-  // Claude Haiku 3.5: 200K context, 8,192 output
+  // Claude Haiku 3.5: 200K context, 8,192 native output
   if (normalizedModelId.includes("haiku-3-5") || normalizedModelId.includes("haiku-3.5")) {
-    return { maxInputTokens: 200_000 - 8192, maxOutputTokens: 8192 };
+    return copilotAlignedLimits(200_000, 8192);
   }
 
-  // Claude Haiku 3: 200K context, 4,096 output
+  // Claude Haiku 3: 200K context, 4,096 native output
   if (normalizedModelId.includes("haiku-3")) {
-    return { maxInputTokens: 200_000 - 4096, maxOutputTokens: 4096 };
+    return copilotAlignedLimits(200_000, 4096);
   }
 
-  // Claude 3.5 Sonnet (older): 200K context, 8,192 output
+  // Claude 3.5 Sonnet (older): 200K context, 8,192 native output
   if (normalizedModelId.includes("sonnet-3-5") || normalizedModelId.includes("sonnet-3.5")) {
-    return { maxInputTokens: 200_000 - 8192, maxOutputTokens: 8192 };
+    return copilotAlignedLimits(200_000, 8192);
   }
 
-  // Claude Opus 3: 200K context, 4,096 output
+  // Claude Opus 3: 200K context, 4,096 native output
   if (normalizedModelId.includes("opus-3")) {
-    return { maxInputTokens: 200_000 - 4096, maxOutputTokens: 4096 };
+    return copilotAlignedLimits(200_000, 4096);
   }
 
   // Default for unknown Claude models
-  return { maxInputTokens: 196_000, maxOutputTokens: 4096 };
+  return copilotAlignedLimits(200_000, 4096);
 }
 
 /**

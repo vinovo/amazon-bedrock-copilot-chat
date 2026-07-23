@@ -114,11 +114,11 @@ You can customize the extension's behavior through VSCode settings:
 
 **Available settings**:
 
-1. **Context Window Size** (`bedrock.context1M.enabled`)
-   - **Default**: Enabled
-   - **Description**: Enable 1M token context window for Claude Sonnet 4.x and Opus 4.6 models
-   - **Values**: `true` (1M context) or `false` (200K context)
-   - **Note**: Enabling 1M context increases API costs but allows much larger conversations
+1. **Context Window Size** (per-model picker)
+   - **Default**: 200K
+   - **Description**: Choose the context window for models whose 1M window is toggleable (Claude Sonnet 4.x/5 and Opus 4.6/4.7/4.8). This is selected per model via the **Context Size** control in the chat model picker, not a global setting.
+   - **Values**: `200K` (standard) or `1M` (extended)
+   - **Note**: The 1M context window increases API costs but allows much larger conversations. Your choice is remembered per model.
 
 2. **Thinking Effort** (`bedrock.thinking.effort`)
    - **Default**: `high`

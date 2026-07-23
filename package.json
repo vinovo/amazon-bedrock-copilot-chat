@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/vinovo/amazon-bedrock-copilot-chat"
   },
-  "version": "0.15.2",
+  "version": "0.16.2",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -113,12 +113,6 @@
             "Do not stream thinking text (thinking blocks come back empty; the encrypted signature is still returned for multi-turn continuity). Reduces time-to-first-text-token; you are still billed for the full thinking tokens."
           ],
           "description": "Fallback: controls how Anthropic Claude thinking content is returned. Only used when the model picker does NOT provide a per-model thinking-display configuration — the picker's per-model value takes precedence.",
-          "scope": "resource"
-        },
-        "bedrock.context1M.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable 1M context window for Claude Sonnet 5, Sonnet 4.x, and Opus 4.6/4.7/4.8 models. When enabled, these models can handle up to 1 million tokens of input context. Note: Using 1M context increases API costs.",
           "scope": "resource"
         },
         "bedrock.promptCaching.enabled": {

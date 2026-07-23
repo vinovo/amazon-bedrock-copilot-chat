@@ -145,7 +145,7 @@ var require_dist_cjs = __commonJS((exports2) => {
   exports2.resolveDefaultRuntimeConfig = resolveDefaultRuntimeConfig;
 });
 
-// node_modules/@smithy/protocol-http/dist-cjs/index.js
+// node_modules/@aws-sdk/middleware-host-header/node_modules/@smithy/protocol-http/dist-cjs/index.js
 var require_dist_cjs2 = __commonJS((exports2) => {
   var types = require_dist_cjs();
   var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
@@ -509,12 +509,171 @@ var require_invoke_store = __commonJS((exports2) => {
   exports2.InvokeStoreBase = InvokeStoreBase;
 });
 
+// node_modules/@aws-sdk/middleware-recursion-detection/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs5 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@aws-sdk/middleware-recursion-detection/dist-cjs/recursionDetectionMiddleware.js
 var require_recursionDetectionMiddleware = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.recursionDetectionMiddleware = undefined;
   var lambda_invoke_store_1 = require_invoke_store();
-  var protocol_http_1 = require_dist_cjs2();
+  var protocol_http_1 = require_dist_cjs5();
   var TRACE_ID_HEADER_NAME = "X-Amzn-Trace-Id";
   var ENV_LAMBDA_FUNCTION_NAME = "AWS_LAMBDA_FUNCTION_NAME";
   var ENV_TRACE_ID = "_X_AMZN_TRACE_ID";
@@ -545,7 +704,7 @@ var require_recursionDetectionMiddleware = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/middleware-recursion-detection/dist-cjs/index.js
-var require_dist_cjs5 = __commonJS((exports2) => {
+var require_dist_cjs6 = __commonJS((exports2) => {
   var recursionDetectionMiddleware = require_recursionDetectionMiddleware();
   var recursionDetectionMiddlewareOptions = {
     step: "build",
@@ -570,8 +729,167 @@ var require_dist_cjs5 = __commonJS((exports2) => {
   });
 });
 
+// node_modules/@smithy/core/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs7 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/util-middleware/dist-cjs/index.js
-var require_dist_cjs6 = __commonJS((exports2) => {
+var require_dist_cjs8 = __commonJS((exports2) => {
   var types = require_dist_cjs();
   var getSmithyContext = (context) => context[types.SMITHY_CONTEXT_KEY] || (context[types.SMITHY_CONTEXT_KEY] = {});
   var normalizeProvider = (input) => {
@@ -585,14 +903,14 @@ var require_dist_cjs6 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/is-array-buffer/dist-cjs/index.js
-var require_dist_cjs7 = __commonJS((exports2) => {
+var require_dist_cjs9 = __commonJS((exports2) => {
   var isArrayBuffer = (arg) => typeof ArrayBuffer === "function" && arg instanceof ArrayBuffer || Object.prototype.toString.call(arg) === "[object ArrayBuffer]";
   exports2.isArrayBuffer = isArrayBuffer;
 });
 
 // node_modules/@smithy/util-buffer-from/dist-cjs/index.js
-var require_dist_cjs8 = __commonJS((exports2) => {
-  var isArrayBuffer = require_dist_cjs7();
+var require_dist_cjs10 = __commonJS((exports2) => {
+  var isArrayBuffer = require_dist_cjs9();
   var buffer = require("buffer");
   var fromArrayBuffer = (input, offset = 0, length = input.byteLength - offset) => {
     if (!isArrayBuffer.isArrayBuffer(input)) {
@@ -614,7 +932,7 @@ var require_dist_cjs8 = __commonJS((exports2) => {
 var require_fromBase64 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromBase64 = undefined;
-  var util_buffer_from_1 = require_dist_cjs8();
+  var util_buffer_from_1 = require_dist_cjs10();
   var BASE64_REGEX = /^[A-Za-z0-9+/]*={0,2}$/;
   var fromBase64 = (input) => {
     if (input.length * 3 % 4 !== 0) {
@@ -630,8 +948,8 @@ var require_fromBase64 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-utf8/dist-cjs/index.js
-var require_dist_cjs9 = __commonJS((exports2) => {
-  var utilBufferFrom = require_dist_cjs8();
+var require_dist_cjs11 = __commonJS((exports2) => {
+  var utilBufferFrom = require_dist_cjs10();
   var fromUtf8 = (input) => {
     const buf = utilBufferFrom.fromString(input, "utf8");
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength / Uint8Array.BYTES_PER_ELEMENT);
@@ -663,8 +981,8 @@ var require_dist_cjs9 = __commonJS((exports2) => {
 var require_toBase64 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.toBase64 = undefined;
-  var util_buffer_from_1 = require_dist_cjs8();
-  var util_utf8_1 = require_dist_cjs9();
+  var util_buffer_from_1 = require_dist_cjs10();
+  var util_utf8_1 = require_dist_cjs11();
   var toBase64 = (_input) => {
     let input;
     if (typeof _input === "string") {
@@ -681,7 +999,7 @@ var require_toBase64 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-base64/dist-cjs/index.js
-var require_dist_cjs10 = __commonJS((exports2) => {
+var require_dist_cjs12 = __commonJS((exports2) => {
   var fromBase64 = require_fromBase64();
   var toBase64 = require_toBase64();
   Object.prototype.hasOwnProperty.call(fromBase64, "__proto__") && !Object.prototype.hasOwnProperty.call(exports2, "__proto__") && Object.defineProperty(exports2, "__proto__", {
@@ -706,7 +1024,7 @@ var require_dist_cjs10 = __commonJS((exports2) => {
 var require_ChecksumStream = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.ChecksumStream = undefined;
-  var util_base64_1 = require_dist_cjs10();
+  var util_base64_1 = require_dist_cjs12();
   var stream_1 = require("stream");
 
   class ChecksumStream extends stream_1.Duplex {
@@ -793,7 +1111,7 @@ var require_ChecksumStream_browser = __commonJS((exports2) => {
 var require_createChecksumStream_browser = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.createChecksumStream = undefined;
-  var util_base64_1 = require_dist_cjs10();
+  var util_base64_1 = require_dist_cjs12();
   var stream_type_check_1 = require_stream_type_check();
   var ChecksumStream_browser_1 = require_ChecksumStream_browser();
   var createChecksumStream = ({ expectedChecksum, checksum, source, checksumSourceLocation, base64Encoder }) => {
@@ -1211,8 +1529,167 @@ var require_headStream = __commonJS((exports2) => {
   }
 });
 
+// node_modules/@smithy/node-http-handler/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs13 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/util-uri-escape/dist-cjs/index.js
-var require_dist_cjs11 = __commonJS((exports2) => {
+var require_dist_cjs14 = __commonJS((exports2) => {
   var escapeUri = (uri) => encodeURIComponent(uri).replace(/[!'()*]/g, hexEncode);
   var hexEncode = (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`;
   var escapeUriPath = (uri) => uri.split("/").map(escapeUri).join("/");
@@ -1221,8 +1698,8 @@ var require_dist_cjs11 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/querystring-builder/dist-cjs/index.js
-var require_dist_cjs12 = __commonJS((exports2) => {
-  var utilUriEscape = require_dist_cjs11();
+var require_dist_cjs15 = __commonJS((exports2) => {
+  var utilUriEscape = require_dist_cjs14();
   function buildQueryString(query) {
     const parts = [];
     for (let key of Object.keys(query).sort()) {
@@ -1246,9 +1723,9 @@ var require_dist_cjs12 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/node-http-handler/dist-cjs/index.js
-var require_dist_cjs13 = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs2();
-  var querystringBuilder = require_dist_cjs12();
+var require_dist_cjs16 = __commonJS((exports2) => {
+  var protocolHttp = require_dist_cjs13();
+  var querystringBuilder = require_dist_cjs15();
   var node_https = require("node:https");
   var node_stream = require("node:stream");
   var http2 = require("node:http2");
@@ -1974,11 +2451,170 @@ or increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler conf
   exports2.streamCollector = streamCollector;
 });
 
+// node_modules/@smithy/fetch-http-handler/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs17 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/fetch-http-handler/dist-cjs/index.js
-var require_dist_cjs14 = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs2();
-  var querystringBuilder = require_dist_cjs12();
-  var utilBase64 = require_dist_cjs10();
+var require_dist_cjs18 = __commonJS((exports2) => {
+  var protocolHttp = require_dist_cjs17();
+  var querystringBuilder = require_dist_cjs15();
+  var utilBase64 = require_dist_cjs12();
   function createRequest(url, requestOptions) {
     return new Request(url, requestOptions);
   }
@@ -2201,7 +2837,7 @@ var require_dist_cjs14 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-hex-encoding/dist-cjs/index.js
-var require_dist_cjs15 = __commonJS((exports2) => {
+var require_dist_cjs19 = __commonJS((exports2) => {
   var SHORT_TO_HEX = {};
   var HEX_TO_SHORT = {};
   for (let i = 0;i < 256; i++) {
@@ -2242,10 +2878,10 @@ var require_dist_cjs15 = __commonJS((exports2) => {
 var require_sdk_stream_mixin_browser = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.sdkStreamMixin = undefined;
-  var fetch_http_handler_1 = require_dist_cjs14();
-  var util_base64_1 = require_dist_cjs10();
-  var util_hex_encoding_1 = require_dist_cjs15();
-  var util_utf8_1 = require_dist_cjs9();
+  var fetch_http_handler_1 = require_dist_cjs18();
+  var util_base64_1 = require_dist_cjs12();
+  var util_hex_encoding_1 = require_dist_cjs19();
+  var util_utf8_1 = require_dist_cjs11();
   var stream_type_check_1 = require_stream_type_check();
   var ERR_MSG_STREAM_HAS_BEEN_TRANSFORMED = "The stream has already been transformed.";
   var sdkStreamMixin = (stream) => {
@@ -2307,8 +2943,8 @@ var require_sdk_stream_mixin_browser = __commonJS((exports2) => {
 var require_sdk_stream_mixin = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.sdkStreamMixin = undefined;
-  var node_http_handler_1 = require_dist_cjs13();
-  var util_buffer_from_1 = require_dist_cjs8();
+  var node_http_handler_1 = require_dist_cjs16();
+  var util_buffer_from_1 = require_dist_cjs10();
   var stream_1 = require("stream");
   var sdk_stream_mixin_browser_1 = require_sdk_stream_mixin_browser();
   var ERR_MSG_STREAM_HAS_BEEN_TRANSFORMED = "The stream has already been transformed.";
@@ -2391,9 +3027,9 @@ var require_splitStream = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-stream/dist-cjs/index.js
-var require_dist_cjs16 = __commonJS((exports2) => {
-  var utilBase64 = require_dist_cjs10();
-  var utilUtf8 = require_dist_cjs9();
+var require_dist_cjs20 = __commonJS((exports2) => {
+  var utilBase64 = require_dist_cjs12();
+  var utilUtf8 = require_dist_cjs11();
   var ChecksumStream = require_ChecksumStream();
   var createChecksumStream = require_createChecksumStream();
   var createBufferedReadable = require_createBufferedReadable();
@@ -2486,7 +3122,7 @@ var require_dist_cjs16 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/querystring-parser/dist-cjs/index.js
-var require_dist_cjs17 = __commonJS((exports2) => {
+var require_dist_cjs21 = __commonJS((exports2) => {
   function parseQueryString(querystring) {
     const query = {};
     querystring = querystring.replace(/^\?/, "");
@@ -2512,8 +3148,8 @@ var require_dist_cjs17 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/url-parser/dist-cjs/index.js
-var require_dist_cjs18 = __commonJS((exports2) => {
-  var querystringParser = require_dist_cjs17();
+var require_dist_cjs22 = __commonJS((exports2) => {
+  var querystringParser = require_dist_cjs21();
   var parseUrl = (url) => {
     if (typeof url === "string") {
       return parseUrl(new URL(url));
@@ -2536,7 +3172,7 @@ var require_dist_cjs18 = __commonJS((exports2) => {
 
 // node_modules/@smithy/core/dist-cjs/submodules/endpoints/index.js
 var require_endpoints = __commonJS((exports2) => {
-  var urlParser = require_dist_cjs18();
+  var urlParser = require_dist_cjs22();
   var toEndpointV1 = (endpoint) => {
     if (typeof endpoint === "object") {
       if ("url" in endpoint) {
@@ -2558,8 +3194,8 @@ var require_endpoints = __commonJS((exports2) => {
 
 // node_modules/@smithy/core/dist-cjs/submodules/schema/index.js
 var require_schema = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs2();
-  var utilMiddleware = require_dist_cjs6();
+  var protocolHttp = require_dist_cjs7();
+  var utilMiddleware = require_dist_cjs8();
   var endpoints = require_endpoints();
   var deref = (schemaRef) => {
     if (typeof schemaRef === "function") {
@@ -3835,7 +4471,7 @@ var require_randomUUID = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/uuid/dist-cjs/index.js
-var require_dist_cjs19 = __commonJS((exports2) => {
+var require_dist_cjs23 = __commonJS((exports2) => {
   var randomUUID = require_randomUUID();
   var decimalToHex = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
   var v4 = () => {
@@ -3853,7 +4489,7 @@ var require_dist_cjs19 = __commonJS((exports2) => {
 
 // node_modules/@smithy/core/dist-cjs/submodules/serde/index.js
 var require_serde = __commonJS((exports2) => {
-  var uuid = require_dist_cjs19();
+  var uuid = require_dist_cjs23();
   var copyDocumentWithTransform = (source, schemaRef, transform = (_) => _) => source;
   var parseBoolean = (value) => {
     switch (value) {
@@ -4525,7 +5161,7 @@ var require_serde = __commonJS((exports2) => {
 
 // node_modules/@smithy/core/dist-cjs/submodules/event-streams/index.js
 var require_event_streams = __commonJS((exports2) => {
-  var utilUtf8 = require_dist_cjs9();
+  var utilUtf8 = require_dist_cjs11();
 
   class EventStreamSerde {
     marshaller;
@@ -4766,12 +5402,12 @@ var require_event_streams = __commonJS((exports2) => {
 
 // node_modules/@smithy/core/dist-cjs/submodules/protocols/index.js
 var require_protocols = __commonJS((exports2) => {
-  var utilStream = require_dist_cjs16();
+  var utilStream = require_dist_cjs20();
   var schema = require_schema();
   var serde = require_serde();
-  var protocolHttp = require_dist_cjs2();
-  var utilBase64 = require_dist_cjs10();
-  var utilUtf8 = require_dist_cjs9();
+  var protocolHttp = require_dist_cjs7();
+  var utilBase64 = require_dist_cjs12();
+  var utilUtf8 = require_dist_cjs11();
   var collectBody = async (streamBody = new Uint8Array, context) => {
     if (streamBody instanceof Uint8Array) {
       return utilStream.Uint8ArrayBlobAdapter.mutate(streamBody);
@@ -5595,10 +6231,10 @@ var require_protocols = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/core/dist-cjs/index.js
-var require_dist_cjs20 = __commonJS((exports2) => {
+var require_dist_cjs24 = __commonJS((exports2) => {
   var types = require_dist_cjs();
-  var protocolHttp = require_dist_cjs2();
-  var utilMiddleware = require_dist_cjs6();
+  var protocolHttp = require_dist_cjs7();
+  var utilMiddleware = require_dist_cjs8();
   var protocols = require_protocols();
   var getSmithyContext = (context) => context[types.SMITHY_CONTEXT_KEY] || (context[types.SMITHY_CONTEXT_KEY] = {});
   var resolveAuthOptions = (candidateAuthOptions, authSchemePreference) => {
@@ -5921,7 +6557,7 @@ var require_dist_cjs20 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-endpoints/dist-cjs/index.js
-var require_dist_cjs21 = __commonJS((exports2) => {
+var require_dist_cjs25 = __commonJS((exports2) => {
   var types = require_dist_cjs();
 
   class EndpointCache {
@@ -6350,9 +6986,9 @@ var require_dist_cjs21 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/util-endpoints/dist-cjs/index.js
-var require_dist_cjs22 = __commonJS((exports2) => {
-  var utilEndpoints = require_dist_cjs21();
-  var urlParser = require_dist_cjs18();
+var require_dist_cjs26 = __commonJS((exports2) => {
+  var utilEndpoints = require_dist_cjs25();
+  var urlParser = require_dist_cjs22();
   var isVirtualHostableS3Bucket = (value, allowSubDomains = false) => {
     if (allowSubDomains) {
       for (const label of value.split(".")) {
@@ -6747,6 +7383,165 @@ var require_dist_cjs22 = __commonJS((exports2) => {
   exports2.useDefaultPartitionInfo = useDefaultPartitionInfo;
 });
 
+// node_modules/@aws-sdk/middleware-user-agent/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs27 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@aws-sdk/core/dist-cjs/submodules/client/index.js
 var require_client = __commonJS((exports2) => {
   var state = {
@@ -6812,7 +7607,7 @@ More information can be found at: https://a.co/c895JFp`);
 });
 
 // node_modules/@smithy/service-error-classification/dist-cjs/index.js
-var require_dist_cjs23 = __commonJS((exports2) => {
+var require_dist_cjs28 = __commonJS((exports2) => {
   var CLOCK_SKEW_ERROR_CODES = [
     "AuthFailure",
     "InvalidSignatureException",
@@ -6880,8 +7675,8 @@ var require_dist_cjs23 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-retry/dist-cjs/index.js
-var require_dist_cjs24 = __commonJS((exports2) => {
-  var serviceErrorClassification = require_dist_cjs23();
+var require_dist_cjs29 = __commonJS((exports2) => {
+  var serviceErrorClassification = require_dist_cjs28();
   exports2.RETRY_MODES = undefined;
   (function(RETRY_MODES) {
     RETRY_MODES["STANDARD"] = "standard";
@@ -7202,12 +7997,12 @@ var require_dist_cjs24 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/middleware-user-agent/dist-cjs/index.js
-var require_dist_cjs25 = __commonJS((exports2) => {
-  var core = require_dist_cjs20();
-  var utilEndpoints = require_dist_cjs22();
-  var protocolHttp = require_dist_cjs2();
+var require_dist_cjs30 = __commonJS((exports2) => {
+  var core = require_dist_cjs24();
+  var utilEndpoints = require_dist_cjs26();
+  var protocolHttp = require_dist_cjs27();
   var client = require_client();
-  var utilRetry = require_dist_cjs24();
+  var utilRetry = require_dist_cjs29();
   var DEFAULT_UA_APP_ID = undefined;
   function isValidUserAgentAppId(appId) {
     if (appId === undefined) {
@@ -7380,7 +8175,7 @@ var require_dist_cjs25 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-config-provider/dist-cjs/index.js
-var require_dist_cjs26 = __commonJS((exports2) => {
+var require_dist_cjs31 = __commonJS((exports2) => {
   var booleanSelector = (obj, key, type) => {
     if (!(key in obj))
       return;
@@ -7409,10 +8204,10 @@ var require_dist_cjs26 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/config-resolver/dist-cjs/index.js
-var require_dist_cjs27 = __commonJS((exports2) => {
-  var utilConfigProvider = require_dist_cjs26();
-  var utilMiddleware = require_dist_cjs6();
-  var utilEndpoints = require_dist_cjs21();
+var require_dist_cjs32 = __commonJS((exports2) => {
+  var utilConfigProvider = require_dist_cjs31();
+  var utilMiddleware = require_dist_cjs8();
+  var utilEndpoints = require_dist_cjs25();
   var ENV_USE_DUALSTACK_ENDPOINT = "AWS_USE_DUALSTACK_ENDPOINT";
   var CONFIG_USE_DUALSTACK_ENDPOINT = "use_dualstack_endpoint";
   var DEFAULT_USE_DUALSTACK_ENDPOINT = false;
@@ -7579,9 +8374,168 @@ var require_dist_cjs27 = __commonJS((exports2) => {
   exports2.resolveRegionConfig = resolveRegionConfig;
 });
 
+// node_modules/@smithy/middleware-content-length/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs33 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/middleware-content-length/dist-cjs/index.js
-var require_dist_cjs28 = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs2();
+var require_dist_cjs34 = __commonJS((exports2) => {
+  var protocolHttp = require_dist_cjs33();
   var CONTENT_LENGTH_HEADER = "content-length";
   function contentLengthMiddleware(bodyLengthChecker) {
     return (next) => async (args) => {
@@ -7621,7 +8575,7 @@ var require_dist_cjs28 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/property-provider/dist-cjs/index.js
-var require_dist_cjs29 = __commonJS((exports2) => {
+var require_dist_cjs35 = __commonJS((exports2) => {
   class ProviderError extends Error {
     name = "ProviderError";
     tryNextLink;
@@ -7814,7 +8768,7 @@ var require_readFile = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/shared-ini-file-loader/dist-cjs/index.js
-var require_dist_cjs30 = __commonJS((exports2) => {
+var require_dist_cjs36 = __commonJS((exports2) => {
   var getHomeDir = require_getHomeDir();
   var getSSOTokenFilepath = require_getSSOTokenFilepath();
   var getSSOTokenFromFile = require_getSSOTokenFromFile();
@@ -7979,9 +8933,9 @@ var require_dist_cjs30 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/node-config-provider/dist-cjs/index.js
-var require_dist_cjs31 = __commonJS((exports2) => {
-  var propertyProvider = require_dist_cjs29();
-  var sharedIniFileLoader = require_dist_cjs30();
+var require_dist_cjs37 = __commonJS((exports2) => {
+  var propertyProvider = require_dist_cjs35();
+  var sharedIniFileLoader = require_dist_cjs36();
   function getSelectorName(functionString) {
     try {
       const constants = new Set(Array.from(functionString.match(/([A-Z_]){3,}/g) ?? []));
@@ -8035,7 +8989,7 @@ var require_dist_cjs31 = __commonJS((exports2) => {
 var require_getEndpointUrlConfig = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.getEndpointUrlConfig = undefined;
-  var shared_ini_file_loader_1 = require_dist_cjs30();
+  var shared_ini_file_loader_1 = require_dist_cjs36();
   var ENV_ENDPOINT_URL = "AWS_ENDPOINT_URL";
   var CONFIG_ENDPOINT_URL = "endpoint_url";
   var getEndpointUrlConfig = (serviceId) => ({
@@ -8073,15 +9027,174 @@ var require_getEndpointUrlConfig = __commonJS((exports2) => {
 var require_getEndpointFromConfig = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.getEndpointFromConfig = undefined;
-  var node_config_provider_1 = require_dist_cjs31();
+  var node_config_provider_1 = require_dist_cjs37();
   var getEndpointUrlConfig_1 = require_getEndpointUrlConfig();
   var getEndpointFromConfig = async (serviceId) => (0, node_config_provider_1.loadConfig)((0, getEndpointUrlConfig_1.getEndpointUrlConfig)(serviceId ?? ""))();
   exports2.getEndpointFromConfig = getEndpointFromConfig;
 });
 
+// node_modules/@smithy/middleware-serde/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs38 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/middleware-serde/dist-cjs/index.js
-var require_dist_cjs32 = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs2();
+var require_dist_cjs39 = __commonJS((exports2) => {
+  var protocolHttp = require_dist_cjs38();
   var endpoints = require_endpoints();
   var deserializerMiddleware = (options, deserializer) => (next, context) => async (args) => {
     const { response } = await next(args);
@@ -8176,12 +9289,12 @@ var require_dist_cjs32 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/middleware-endpoint/dist-cjs/index.js
-var require_dist_cjs33 = __commonJS((exports2) => {
-  var core = require_dist_cjs20();
-  var utilMiddleware = require_dist_cjs6();
+var require_dist_cjs40 = __commonJS((exports2) => {
+  var core = require_dist_cjs24();
+  var utilMiddleware = require_dist_cjs8();
   var getEndpointFromConfig = require_getEndpointFromConfig();
-  var urlParser = require_dist_cjs18();
-  var middlewareSerde = require_dist_cjs32();
+  var urlParser = require_dist_cjs22();
+  var middlewareSerde = require_dist_cjs39();
   var resolveParamsForS3 = async (endpointParams) => {
     const bucket = endpointParams?.Bucket || "";
     if (typeof endpointParams.Bucket === "string") {
@@ -8426,8 +9539,167 @@ var require_dist_cjs33 = __commonJS((exports2) => {
   exports2.toEndpointV1 = toEndpointV1;
 });
 
+// node_modules/@smithy/middleware-retry/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs41 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/middleware-stack/dist-cjs/index.js
-var require_dist_cjs34 = __commonJS((exports2) => {
+var require_dist_cjs42 = __commonJS((exports2) => {
   var getAllAliases = (name, aliases) => {
     const _aliases = [];
     if (name) {
@@ -8695,8 +9967,8 @@ var require_dist_cjs34 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/smithy-client/dist-cjs/index.js
-var require_dist_cjs35 = __commonJS((exports2) => {
-  var middlewareStack = require_dist_cjs34();
+var require_dist_cjs43 = __commonJS((exports2) => {
+  var middlewareStack = require_dist_cjs42();
   var types = require_dist_cjs();
   var schema = require_schema();
   var serde = require_serde();
@@ -9302,13 +10574,13 @@ var require_isStreamingPayload = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/middleware-retry/dist-cjs/index.js
-var require_dist_cjs36 = __commonJS((exports2) => {
-  var utilRetry = require_dist_cjs24();
-  var protocolHttp = require_dist_cjs2();
-  var serviceErrorClassification = require_dist_cjs23();
-  var uuid = require_dist_cjs19();
-  var utilMiddleware = require_dist_cjs6();
-  var smithyClient = require_dist_cjs35();
+var require_dist_cjs44 = __commonJS((exports2) => {
+  var utilRetry = require_dist_cjs29();
+  var protocolHttp = require_dist_cjs41();
+  var serviceErrorClassification = require_dist_cjs28();
+  var uuid = require_dist_cjs23();
+  var utilMiddleware = require_dist_cjs8();
+  var smithyClient = require_dist_cjs43();
   var isStreamingPayload = require_isStreamingPayload();
   var serde = require_serde();
   var asSdkError = (error) => {
@@ -9674,14 +10946,332 @@ var require_dist_cjs36 = __commonJS((exports2) => {
   exports2.retryMiddlewareOptions = retryMiddlewareOptions;
 });
 
+// node_modules/@aws-sdk/core/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs45 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
+// node_modules/@smithy/signature-v4/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs46 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/signature-v4/dist-cjs/index.js
-var require_dist_cjs37 = __commonJS((exports2) => {
-  var utilHexEncoding = require_dist_cjs15();
-  var utilUtf8 = require_dist_cjs9();
-  var isArrayBuffer = require_dist_cjs7();
-  var protocolHttp = require_dist_cjs2();
-  var utilMiddleware = require_dist_cjs6();
-  var utilUriEscape = require_dist_cjs11();
+var require_dist_cjs47 = __commonJS((exports2) => {
+  var utilHexEncoding = require_dist_cjs19();
+  var utilUtf8 = require_dist_cjs11();
+  var isArrayBuffer = require_dist_cjs9();
+  var protocolHttp = require_dist_cjs46();
+  var utilMiddleware = require_dist_cjs8();
+  var utilUriEscape = require_dist_cjs14();
   var ALGORITHM_QUERY_PARAM = "X-Amz-Algorithm";
   var CREDENTIAL_QUERY_PARAM = "X-Amz-Credential";
   var AMZ_DATE_QUERY_PARAM = "X-Amz-Date";
@@ -10213,11 +11803,11 @@ ${utilHexEncoding.toHex(hashedRequest)}`;
 
 // node_modules/@aws-sdk/core/dist-cjs/submodules/httpAuthSchemes/index.js
 var require_httpAuthSchemes = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs2();
-  var core = require_dist_cjs20();
-  var propertyProvider = require_dist_cjs29();
+  var protocolHttp = require_dist_cjs45();
+  var core = require_dist_cjs24();
+  var propertyProvider = require_dist_cjs35();
   var client = require_client();
-  var signatureV4 = require_dist_cjs37();
+  var signatureV4 = require_dist_cjs47();
   var getDateHeader = (response) => protocolHttp.HttpResponse.isInstance(response) ? response.headers?.date ?? response.headers?.Date : undefined;
   var getSkewCorrectedDate = (systemClockOffset) => new Date(Date.now() + systemClockOffset);
   var isClockSkewed = (clockTime, systemClockOffset) => Math.abs(getSkewCorrectedDate(systemClockOffset).getTime() - clockTime) >= 300000;
@@ -10506,7 +12096,7 @@ var require_httpAuthSchemeProvider = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.defaultSSMHttpAuthSchemeProvider = exports2.defaultSSMHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_middleware_1 = require_dist_cjs6();
+  var util_middleware_1 = require_dist_cjs8();
   var defaultSSMHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
       operation: (0, util_middleware_1.getSmithyContext)(context).operation,
@@ -10658,9 +12248,9 @@ var require_package = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-env/dist-cjs/index.js
-var require_dist_cjs38 = __commonJS((exports2) => {
+var require_dist_cjs48 = __commonJS((exports2) => {
   var client = require_client();
-  var propertyProvider = require_dist_cjs29();
+  var propertyProvider = require_dist_cjs35();
   var ENV_KEY = "AWS_ACCESS_KEY_ID";
   var ENV_SECRET = "AWS_SECRET_ACCESS_KEY";
   var ENV_SESSION = "AWS_SESSION_TOKEN";
@@ -10699,13 +12289,13 @@ var require_dist_cjs38 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/credential-provider-imds/dist-cjs/index.js
-var require_dist_cjs39 = __commonJS((exports2) => {
-  var propertyProvider = require_dist_cjs29();
+var require_dist_cjs49 = __commonJS((exports2) => {
+  var propertyProvider = require_dist_cjs35();
   var url = require("url");
   var buffer = require("buffer");
   var http = require("http");
-  var nodeConfigProvider = require_dist_cjs31();
-  var urlParser = require_dist_cjs18();
+  var nodeConfigProvider = require_dist_cjs37();
+  var urlParser = require_dist_cjs22();
   function httpRequest(options) {
     return new Promise((resolve, reject) => {
       const req = http.request({
@@ -11046,7 +12636,7 @@ For more information, please visit: ` + STATIC_STABILITY_DOC_URL);
 var require_checkUrl = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.checkUrl = undefined;
-  var property_provider_1 = require_dist_cjs29();
+  var property_provider_1 = require_dist_cjs35();
   var ECS_CONTAINER_HOST = "169.254.170.2";
   var EKS_CONTAINER_HOST_IPv4 = "169.254.170.23";
   var EKS_CONTAINER_HOST_IPv6 = "[fd00:ec2::23]";
@@ -11082,15 +12672,174 @@ var require_checkUrl = __commonJS((exports2) => {
   exports2.checkUrl = checkUrl;
 });
 
+// node_modules/@aws-sdk/credential-provider-http/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs50 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@aws-sdk/credential-provider-http/dist-cjs/fromHttp/requestHelpers.js
 var require_requestHelpers = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.createGetRequest = createGetRequest;
   exports2.getCredentials = getCredentials;
-  var property_provider_1 = require_dist_cjs29();
-  var protocol_http_1 = require_dist_cjs2();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_stream_1 = require_dist_cjs16();
+  var property_provider_1 = require_dist_cjs35();
+  var protocol_http_1 = require_dist_cjs50();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_stream_1 = require_dist_cjs20();
   function createGetRequest(url) {
     return new protocol_http_1.HttpRequest({
       protocol: url.protocol,
@@ -11158,8 +12907,8 @@ var require_fromHttp = __commonJS((exports2) => {
   exports2.fromHttp = undefined;
   var tslib_1 = require_tslib();
   var client_1 = require_client();
-  var node_http_handler_1 = require_dist_cjs13();
-  var property_provider_1 = require_dist_cjs29();
+  var node_http_handler_1 = require_dist_cjs16();
+  var property_provider_1 = require_dist_cjs35();
   var promises_1 = tslib_1.__importDefault(require("node:fs/promises"));
   var checkUrl_1 = require_checkUrl();
   var requestHelpers_1 = require_requestHelpers();
@@ -11218,7 +12967,7 @@ Set AWS_CONTAINER_CREDENTIALS_FULL_URI or AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
 });
 
 // node_modules/@aws-sdk/credential-provider-http/dist-cjs/index.js
-var require_dist_cjs40 = __commonJS((exports2) => {
+var require_dist_cjs51 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromHttp = undefined;
   var fromHttp_1 = require_fromHttp();
@@ -11232,7 +12981,7 @@ var require_httpAuthSchemeProvider2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.defaultSSOOIDCHttpAuthSchemeProvider = exports2.defaultSSOOIDCHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_middleware_1 = require_dist_cjs6();
+  var util_middleware_1 = require_dist_cjs8();
   var defaultSSOOIDCHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
       operation: (0, util_middleware_1.getSmithyContext)(context).operation,
@@ -11437,14 +13186,14 @@ var require_package2 = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-sdk/util-user-agent-node/dist-cjs/index.js
-var require_dist_cjs41 = __commonJS((exports2) => {
-  var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/node_modules/@aws-sdk/util-user-agent-node/dist-cjs";
+var require_dist_cjs52 = __commonJS((exports2) => {
+  var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\node_modules\\@aws-sdk\\util-user-agent-node\\dist-cjs";
   var node_os = require("node:os");
   var node_process = require("node:process");
-  var utilConfigProvider = require_dist_cjs26();
+  var utilConfigProvider = require_dist_cjs31();
   var promises = require("node:fs/promises");
   var node_path = require("node:path");
-  var middlewareUserAgent = require_dist_cjs25();
+  var middlewareUserAgent = require_dist_cjs30();
   var getRuntimeUserAgentPair = () => {
     const runtimesToCheck = ["deno", "bun", "llrt"];
     for (const runtime of runtimesToCheck) {
@@ -11608,9 +13357,9 @@ var require_dist_cjs41 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/hash-node/dist-cjs/index.js
-var require_dist_cjs42 = __commonJS((exports2) => {
-  var utilBufferFrom = require_dist_cjs8();
-  var utilUtf8 = require_dist_cjs9();
+var require_dist_cjs53 = __commonJS((exports2) => {
+  var utilBufferFrom = require_dist_cjs10();
+  var utilUtf8 = require_dist_cjs11();
   var buffer = require("buffer");
   var crypto2 = require("crypto");
 
@@ -11649,7 +13398,7 @@ var require_dist_cjs42 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-body-length-node/dist-cjs/index.js
-var require_dist_cjs43 = __commonJS((exports2) => {
+var require_dist_cjs54 = __commonJS((exports2) => {
   var node_fs = require("node:fs");
   var calculateBodyLength = (body) => {
     if (!body) {
@@ -11676,10 +13425,10 @@ var require_dist_cjs43 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-defaults-mode-node/dist-cjs/index.js
-var require_dist_cjs44 = __commonJS((exports2) => {
-  var configResolver = require_dist_cjs27();
-  var nodeConfigProvider = require_dist_cjs31();
-  var propertyProvider = require_dist_cjs29();
+var require_dist_cjs55 = __commonJS((exports2) => {
+  var configResolver = require_dist_cjs32();
+  var nodeConfigProvider = require_dist_cjs37();
+  var propertyProvider = require_dist_cjs35();
   var AWS_EXECUTION_ENV = "AWS_EXECUTION_ENV";
   var AWS_REGION_ENV = "AWS_REGION";
   var AWS_DEFAULT_REGION_ENV = "AWS_DEFAULT_REGION";
@@ -11735,7 +13484,7 @@ var require_dist_cjs44 = __commonJS((exports2) => {
     }
     if (!process.env[ENV_IMDS_DISABLED]) {
       try {
-        const { getInstanceMetadataEndpoint, httpRequest } = await Promise.resolve().then(() => __toESM(require_dist_cjs39()));
+        const { getInstanceMetadataEndpoint, httpRequest } = await Promise.resolve().then(() => __toESM(require_dist_cjs49()));
         const endpoint = await getInstanceMetadataEndpoint();
         return (await httpRequest({ ...endpoint, path: IMDS_REGION_PATH })).toString();
       } catch (e) {}
@@ -11745,7 +13494,7 @@ var require_dist_cjs44 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/util-body-length-browser/dist-cjs/index.js
-var require_dist_cjs45 = __commonJS((exports2) => {
+var require_dist_cjs56 = __commonJS((exports2) => {
   var TEXT_ENCODER = typeof TextEncoder == "function" ? new TextEncoder : null;
   var calculateBodyLength = (body) => {
     if (typeof body === "string") {
@@ -11776,13 +13525,13 @@ var require_dist_cjs45 = __commonJS((exports2) => {
 // node_modules/@smithy/core/dist-cjs/submodules/cbor/index.js
 var require_cbor = __commonJS((exports2) => {
   var serde = require_serde();
-  var utilUtf8 = require_dist_cjs9();
+  var utilUtf8 = require_dist_cjs11();
   var protocols = require_protocols();
-  var protocolHttp = require_dist_cjs2();
-  var utilBodyLengthBrowser = require_dist_cjs45();
+  var protocolHttp = require_dist_cjs7();
+  var utilBodyLengthBrowser = require_dist_cjs56();
   var schema = require_schema();
-  var utilMiddleware = require_dist_cjs6();
-  var utilBase64 = require_dist_cjs10();
+  var utilMiddleware = require_dist_cjs8();
+  var utilBase64 = require_dist_cjs12();
   var majorUint64 = 0;
   var majorNegativeInt64 = 1;
   var majorUnstructuredByteString = 2;
@@ -14378,7 +16127,7 @@ var require_xml_parser = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/xml-builder/dist-cjs/index.js
-var require_dist_cjs46 = __commonJS((exports2) => {
+var require_dist_cjs57 = __commonJS((exports2) => {
   var xmlParser = require_xml_parser();
   var ATTR_ESCAPE_RE = /[&<>"]/g;
   var ATTR_ESCAPE_MAP = {
@@ -14511,12 +16260,12 @@ var require_dist_cjs46 = __commonJS((exports2) => {
 var require_protocols2 = __commonJS((exports2) => {
   var cbor = require_cbor();
   var schema = require_schema();
-  var smithyClient = require_dist_cjs35();
+  var smithyClient = require_dist_cjs43();
   var protocols = require_protocols();
   var serde = require_serde();
-  var utilBase64 = require_dist_cjs10();
-  var utilUtf8 = require_dist_cjs9();
-  var xmlBuilder = require_dist_cjs46();
+  var utilBase64 = require_dist_cjs12();
+  var utilUtf8 = require_dist_cjs11();
+  var xmlBuilder = require_dist_cjs57();
 
   class ProtocolLib {
     queryCompat;
@@ -16458,8 +18207,8 @@ var require_ruleset = __commonJS((exports2) => {
 var require_endpointResolver = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -16479,7 +18228,7 @@ var require_endpointResolver = __commonJS((exports2) => {
 var require_SSOOIDCServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.SSOOIDCServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -16851,11 +18600,11 @@ var require_runtimeConfig_shared = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var core_1 = require_dist_cjs20();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var core_1 = require_dist_cjs24();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider2();
   var endpointResolver_1 = require_endpointResolver();
   var schemas_0_1 = require_schemas_0();
@@ -16905,16 +18654,16 @@ var require_runtimeConfig = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package2());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -16956,8 +18705,8 @@ var require_stsRegionDefaultResolver = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.warning = undefined;
   exports2.stsRegionDefaultResolver = stsRegionDefaultResolver;
-  var config_resolver_1 = require_dist_cjs27();
-  var node_config_provider_1 = require_dist_cjs31();
+  var config_resolver_1 = require_dist_cjs32();
+  var node_config_provider_1 = require_dist_cjs37();
   function stsRegionDefaultResolver(loaderConfig = {}) {
     return (0, node_config_provider_1.loadConfig)({
       ...config_resolver_1.NODE_REGION_CONFIG_OPTIONS,
@@ -16975,9 +18724,9 @@ var require_stsRegionDefaultResolver = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/region-config-resolver/dist-cjs/index.js
-var require_dist_cjs47 = __commonJS((exports2) => {
+var require_dist_cjs58 = __commonJS((exports2) => {
   var stsRegionDefaultResolver = require_stsRegionDefaultResolver();
-  var configResolver = require_dist_cjs27();
+  var configResolver = require_dist_cjs32();
   var getAwsRegionExtensionConfiguration = (runtimeConfig) => {
     return {
       setRegion(region) {
@@ -17010,23 +18759,182 @@ var require_dist_cjs47 = __commonJS((exports2) => {
   });
 });
 
+// node_modules/@aws-sdk/nested-clients/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs59 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@aws-sdk/nested-clients/dist-cjs/submodules/sso-oidc/index.js
 var require_sso_oidc = __commonJS((exports2) => {
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
-  var middlewareRecursionDetection = require_dist_cjs5();
-  var middlewareUserAgent = require_dist_cjs25();
-  var configResolver = require_dist_cjs27();
-  var core = require_dist_cjs20();
+  var middlewareRecursionDetection = require_dist_cjs6();
+  var middlewareUserAgent = require_dist_cjs30();
+  var configResolver = require_dist_cjs32();
+  var core = require_dist_cjs24();
   var schema = require_schema();
-  var middlewareContentLength = require_dist_cjs28();
-  var middlewareEndpoint = require_dist_cjs33();
-  var middlewareRetry = require_dist_cjs36();
-  var smithyClient = require_dist_cjs35();
+  var middlewareContentLength = require_dist_cjs34();
+  var middlewareEndpoint = require_dist_cjs40();
+  var middlewareRetry = require_dist_cjs44();
+  var smithyClient = require_dist_cjs43();
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider2();
   var runtimeConfig = require_runtimeConfig();
-  var regionConfigResolver = require_dist_cjs47();
-  var protocolHttp = require_dist_cjs2();
+  var regionConfigResolver = require_dist_cjs58();
+  var protocolHttp = require_dist_cjs59();
   var schemas_0 = require_schemas_0();
   var errors = require_errors();
   var SSOOIDCServiceException = require_SSOOIDCServiceException();
@@ -17168,11 +19076,11 @@ var require_sso_oidc = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-sso/node_modules/@aws-sdk/token-providers/dist-cjs/index.js
-var require_dist_cjs48 = __commonJS((exports2) => {
+var require_dist_cjs60 = __commonJS((exports2) => {
   var client = require_client();
   var httpAuthSchemes = require_httpAuthSchemes();
-  var propertyProvider = require_dist_cjs29();
-  var sharedIniFileLoader = require_dist_cjs30();
+  var propertyProvider = require_dist_cjs35();
+  var sharedIniFileLoader = require_dist_cjs36();
   var node_fs = require("node:fs");
   var fromEnvSigningName = ({ logger, signingName } = {}) => async () => {
     logger?.debug?.("@aws-sdk/token-providers - fromEnvSigningName");
@@ -17315,7 +19223,7 @@ var require_httpAuthSchemeProvider3 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.defaultSSOHttpAuthSchemeProvider = exports2.defaultSSOHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_middleware_1 = require_dist_cjs6();
+  var util_middleware_1 = require_dist_cjs8();
   var defaultSSOHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
       operation: (0, util_middleware_1.getSmithyContext)(context).operation,
@@ -17503,8 +19411,8 @@ var require_ruleset2 = __commonJS((exports2) => {
 var require_endpointResolver2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset2();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -17524,7 +19432,7 @@ var require_endpointResolver2 = __commonJS((exports2) => {
 var require_SSOServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.SSOServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -17700,11 +19608,11 @@ var require_runtimeConfig_shared2 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var core_1 = require_dist_cjs20();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var core_1 = require_dist_cjs24();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider3();
   var endpointResolver_1 = require_endpointResolver2();
   var schemas_0_1 = require_schemas_02();
@@ -17754,16 +19662,16 @@ var require_runtimeConfig2 = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package2());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared2();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -17804,19 +19712,19 @@ var require_runtimeConfig2 = __commonJS((exports2) => {
 var require_sso = __commonJS((exports2) => {
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
-  var middlewareRecursionDetection = require_dist_cjs5();
-  var middlewareUserAgent = require_dist_cjs25();
-  var configResolver = require_dist_cjs27();
-  var core = require_dist_cjs20();
+  var middlewareRecursionDetection = require_dist_cjs6();
+  var middlewareUserAgent = require_dist_cjs30();
+  var configResolver = require_dist_cjs32();
+  var core = require_dist_cjs24();
   var schema = require_schema();
-  var middlewareContentLength = require_dist_cjs28();
-  var middlewareEndpoint = require_dist_cjs33();
-  var middlewareRetry = require_dist_cjs36();
-  var smithyClient = require_dist_cjs35();
+  var middlewareContentLength = require_dist_cjs34();
+  var middlewareEndpoint = require_dist_cjs40();
+  var middlewareRetry = require_dist_cjs44();
+  var smithyClient = require_dist_cjs43();
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider3();
   var runtimeConfig = require_runtimeConfig2();
-  var regionConfigResolver = require_dist_cjs47();
-  var protocolHttp = require_dist_cjs2();
+  var regionConfigResolver = require_dist_cjs58();
+  var protocolHttp = require_dist_cjs59();
   var schemas_0 = require_schemas_02();
   var errors = require_errors2();
   var SSOServiceException = require_SSOServiceException();
@@ -17954,11 +19862,11 @@ var require_loadSso_BKDNrsal = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-sso/dist-cjs/index.js
-var require_dist_cjs49 = __commonJS((exports2) => {
-  var propertyProvider = require_dist_cjs29();
-  var sharedIniFileLoader = require_dist_cjs30();
+var require_dist_cjs61 = __commonJS((exports2) => {
+  var propertyProvider = require_dist_cjs35();
+  var sharedIniFileLoader = require_dist_cjs36();
   var client = require_client();
-  var tokenProviders = require_dist_cjs48();
+  var tokenProviders = require_dist_cjs60();
   var isSsoProfile = (arg) => arg && (typeof arg.sso_start_url === "string" || typeof arg.sso_account_id === "string" || typeof arg.sso_session === "string" || typeof arg.sso_region === "string" || typeof arg.sso_role_name === "string");
   var SHOULD_FAIL_CREDENTIAL_CHAIN = false;
   var resolveSSOCredentials = async ({ ssoStartUrl, ssoSession, ssoAccountId, ssoRegion, ssoRoleName, ssoClient, clientConfig, parentClientConfig, callerClientConfig, profile, filepath, configFilepath, ignoreCache, logger }) => {
@@ -18130,12 +20038,171 @@ Reference: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.ht
   exports2.validateSsoProfile = validateSsoProfile;
 });
 
+// node_modules/@aws-sdk/credential-provider-login/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs62 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@aws-sdk/nested-clients/dist-cjs/submodules/signin/auth/httpAuthSchemeProvider.js
 var require_httpAuthSchemeProvider4 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.defaultSigninHttpAuthSchemeProvider = exports2.defaultSigninHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_middleware_1 = require_dist_cjs6();
+  var util_middleware_1 = require_dist_cjs8();
   var defaultSigninHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
       operation: (0, util_middleware_1.getSmithyContext)(context).operation,
@@ -18350,8 +20417,8 @@ var require_ruleset3 = __commonJS((exports2) => {
 var require_endpointResolver3 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset3();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -18371,7 +20438,7 @@ var require_endpointResolver3 = __commonJS((exports2) => {
 var require_SigninServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.SigninServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -18590,11 +20657,11 @@ var require_runtimeConfig_shared3 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var core_1 = require_dist_cjs20();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var core_1 = require_dist_cjs24();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider4();
   var endpointResolver_1 = require_endpointResolver3();
   var schemas_0_1 = require_schemas_03();
@@ -18644,16 +20711,16 @@ var require_runtimeConfig3 = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package2());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared3();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -18694,19 +20761,19 @@ var require_runtimeConfig3 = __commonJS((exports2) => {
 var require_signin = __commonJS((exports2) => {
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
-  var middlewareRecursionDetection = require_dist_cjs5();
-  var middlewareUserAgent = require_dist_cjs25();
-  var configResolver = require_dist_cjs27();
-  var core = require_dist_cjs20();
+  var middlewareRecursionDetection = require_dist_cjs6();
+  var middlewareUserAgent = require_dist_cjs30();
+  var configResolver = require_dist_cjs32();
+  var core = require_dist_cjs24();
   var schema = require_schema();
-  var middlewareContentLength = require_dist_cjs28();
-  var middlewareEndpoint = require_dist_cjs33();
-  var middlewareRetry = require_dist_cjs36();
-  var smithyClient = require_dist_cjs35();
+  var middlewareContentLength = require_dist_cjs34();
+  var middlewareEndpoint = require_dist_cjs40();
+  var middlewareRetry = require_dist_cjs44();
+  var smithyClient = require_dist_cjs43();
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider4();
   var runtimeConfig = require_runtimeConfig3();
-  var regionConfigResolver = require_dist_cjs47();
-  var protocolHttp = require_dist_cjs2();
+  var regionConfigResolver = require_dist_cjs58();
+  var protocolHttp = require_dist_cjs59();
   var schemas_0 = require_schemas_03();
   var errors = require_errors3();
   var SigninServiceException = require_SigninServiceException();
@@ -18846,11 +20913,11 @@ var require_signin = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-login/dist-cjs/index.js
-var require_dist_cjs50 = __commonJS((exports2) => {
+var require_dist_cjs63 = __commonJS((exports2) => {
   var client = require_client();
-  var propertyProvider = require_dist_cjs29();
-  var sharedIniFileLoader = require_dist_cjs30();
-  var protocolHttp = require_dist_cjs2();
+  var propertyProvider = require_dist_cjs35();
+  var sharedIniFileLoader = require_dist_cjs36();
+  var protocolHttp = require_dist_cjs62();
   var node_crypto = require("node:crypto");
   var node_fs = require("node:fs");
   var node_os = require("node:os");
@@ -19126,7 +21193,7 @@ var require_httpAuthSchemeProvider5 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.resolveStsAuthConfig = exports2.defaultSTSHttpAuthSchemeProvider = exports2.defaultSTSHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_middleware_1 = require_dist_cjs6();
+  var util_middleware_1 = require_dist_cjs8();
   var STSClient_1 = require_STSClient();
   var defaultSTSHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
@@ -19393,8 +21460,8 @@ var require_ruleset4 = __commonJS((exports2) => {
 var require_endpointResolver4 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset4();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -19414,7 +21481,7 @@ var require_endpointResolver4 = __commonJS((exports2) => {
 var require_STSServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.STSServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -19737,11 +21804,11 @@ var require_runtimeConfig_shared4 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var core_1 = require_dist_cjs20();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var core_1 = require_dist_cjs24();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider5();
   var endpointResolver_1 = require_endpointResolver4();
   var schemas_0_1 = require_schemas_04();
@@ -19792,17 +21859,17 @@ var require_runtimeConfig4 = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package2());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var core_1 = require_dist_cjs20();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var core_1 = require_dist_cjs24();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared4();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -19900,9 +21967,9 @@ var require_httpAuthExtensionConfiguration = __commonJS((exports2) => {
 var require_runtimeExtensions = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveRuntimeExtensions = undefined;
-  var region_config_resolver_1 = require_dist_cjs47();
-  var protocol_http_1 = require_dist_cjs2();
-  var smithy_client_1 = require_dist_cjs35();
+  var region_config_resolver_1 = require_dist_cjs58();
+  var protocol_http_1 = require_dist_cjs59();
+  var smithy_client_1 = require_dist_cjs43();
   var httpAuthExtensionConfiguration_1 = require_httpAuthExtensionConfiguration();
   var resolveRuntimeExtensions = (runtimeConfig, extensions) => {
     const extensionConfiguration = Object.assign((0, region_config_resolver_1.getAwsRegionExtensionConfiguration)(runtimeConfig), (0, smithy_client_1.getDefaultExtensionConfiguration)(runtimeConfig), (0, protocol_http_1.getHttpHandlerExtensionConfiguration)(runtimeConfig), (0, httpAuthExtensionConfiguration_1.getHttpAuthExtensionConfiguration)(runtimeConfig));
@@ -19918,15 +21985,15 @@ var require_STSClient = __commonJS((exports2) => {
   exports2.STSClient = exports2.__Client = undefined;
   var middleware_host_header_1 = require_dist_cjs3();
   var middleware_logger_1 = require_dist_cjs4();
-  var middleware_recursion_detection_1 = require_dist_cjs5();
-  var middleware_user_agent_1 = require_dist_cjs25();
-  var config_resolver_1 = require_dist_cjs27();
-  var core_1 = require_dist_cjs20();
+  var middleware_recursion_detection_1 = require_dist_cjs6();
+  var middleware_user_agent_1 = require_dist_cjs30();
+  var config_resolver_1 = require_dist_cjs32();
+  var core_1 = require_dist_cjs24();
   var schema_1 = require_schema();
-  var middleware_content_length_1 = require_dist_cjs28();
-  var middleware_endpoint_1 = require_dist_cjs33();
-  var middleware_retry_1 = require_dist_cjs36();
-  var smithy_client_1 = require_dist_cjs35();
+  var middleware_content_length_1 = require_dist_cjs34();
+  var middleware_endpoint_1 = require_dist_cjs40();
+  var middleware_retry_1 = require_dist_cjs44();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__Client", { enumerable: true, get: function() {
     return smithy_client_1.Client;
   } });
@@ -19975,13 +22042,13 @@ var require_STSClient = __commonJS((exports2) => {
 // node_modules/@aws-sdk/nested-clients/dist-cjs/submodules/sts/index.js
 var require_sts = __commonJS((exports2) => {
   var STSClient = require_STSClient();
-  var smithyClient = require_dist_cjs35();
-  var middlewareEndpoint = require_dist_cjs33();
+  var smithyClient = require_dist_cjs43();
+  var middlewareEndpoint = require_dist_cjs40();
   var EndpointParameters = require_EndpointParameters();
   var schemas_0 = require_schemas_04();
   var errors = require_errors4();
   var client = require_client();
-  var regionConfigResolver = require_dist_cjs47();
+  var regionConfigResolver = require_dist_cjs58();
   var STSServiceException = require_STSServiceException();
 
   class AssumeRoleCommand extends smithyClient.Command.classBuilder().ep(EndpointParameters.commonParams).m(function(Command, cs, config, o) {
@@ -20154,9 +22221,9 @@ var require_sts = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-process/dist-cjs/index.js
-var require_dist_cjs51 = __commonJS((exports2) => {
-  var sharedIniFileLoader = require_dist_cjs30();
-  var propertyProvider = require_dist_cjs29();
+var require_dist_cjs64 = __commonJS((exports2) => {
+  var sharedIniFileLoader = require_dist_cjs36();
+  var propertyProvider = require_dist_cjs35();
   var node_child_process = require("node:child_process");
   var node_util = require("node:util");
   var client = require_client();
@@ -20307,8 +22374,8 @@ var require_fromTokenFile = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromTokenFile = undefined;
   var client_1 = require_client();
-  var property_provider_1 = require_dist_cjs29();
-  var shared_ini_file_loader_1 = require_dist_cjs30();
+  var property_provider_1 = require_dist_cjs35();
+  var shared_ini_file_loader_1 = require_dist_cjs36();
   var node_fs_1 = require("node:fs");
   var fromWebToken_1 = require_fromWebToken();
   var ENV_TOKEN_FILE = "AWS_WEB_IDENTITY_TOKEN_FILE";
@@ -20339,7 +22406,7 @@ var require_fromTokenFile = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-web-identity/dist-cjs/index.js
-var require_dist_cjs52 = __commonJS((exports2) => {
+var require_dist_cjs65 = __commonJS((exports2) => {
   var fromTokenFile = require_fromTokenFile();
   var fromWebToken = require_fromWebToken();
   Object.prototype.hasOwnProperty.call(fromTokenFile, "__proto__") && !Object.prototype.hasOwnProperty.call(exports2, "__proto__") && Object.defineProperty(exports2, "__proto__", {
@@ -20361,27 +22428,27 @@ var require_dist_cjs52 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-ini/dist-cjs/index.js
-var require_dist_cjs53 = __commonJS((exports2) => {
-  var sharedIniFileLoader = require_dist_cjs30();
-  var propertyProvider = require_dist_cjs29();
+var require_dist_cjs66 = __commonJS((exports2) => {
+  var sharedIniFileLoader = require_dist_cjs36();
+  var propertyProvider = require_dist_cjs35();
   var client = require_client();
-  var credentialProviderLogin = require_dist_cjs50();
+  var credentialProviderLogin = require_dist_cjs63();
   var resolveCredentialSource = (credentialSource, profileName, logger) => {
     const sourceProvidersMap = {
       EcsContainer: async (options) => {
-        const { fromHttp } = await Promise.resolve().then(() => __toESM(require_dist_cjs40()));
-        const { fromContainerMetadata } = await Promise.resolve().then(() => __toESM(require_dist_cjs39()));
+        const { fromHttp } = await Promise.resolve().then(() => __toESM(require_dist_cjs51()));
+        const { fromContainerMetadata } = await Promise.resolve().then(() => __toESM(require_dist_cjs49()));
         logger?.debug("@aws-sdk/credential-provider-ini - credential_source is EcsContainer");
         return async () => propertyProvider.chain(fromHttp(options ?? {}), fromContainerMetadata(options))().then(setNamedProvider);
       },
       Ec2InstanceMetadata: async (options) => {
         logger?.debug("@aws-sdk/credential-provider-ini - credential_source is Ec2InstanceMetadata");
-        const { fromInstanceMetadata } = await Promise.resolve().then(() => __toESM(require_dist_cjs39()));
+        const { fromInstanceMetadata } = await Promise.resolve().then(() => __toESM(require_dist_cjs49()));
         return async () => fromInstanceMetadata(options)().then(setNamedProvider);
       },
       Environment: async (options) => {
         logger?.debug("@aws-sdk/credential-provider-ini - credential_source is Environment");
-        const { fromEnv } = await Promise.resolve().then(() => __toESM(require_dist_cjs38()));
+        const { fromEnv } = await Promise.resolve().then(() => __toESM(require_dist_cjs48()));
         return async () => fromEnv(options)().then(setNamedProvider);
       }
     };
@@ -20468,12 +22535,12 @@ var require_dist_cjs53 = __commonJS((exports2) => {
     return client.setCredentialFeature(credentials, "CREDENTIALS_PROFILE_LOGIN", "AC");
   };
   var isProcessProfile = (arg) => Boolean(arg) && typeof arg === "object" && typeof arg.credential_process === "string";
-  var resolveProcessCredentials = async (options, profile) => Promise.resolve().then(() => __toESM(require_dist_cjs51())).then(({ fromProcess }) => fromProcess({
+  var resolveProcessCredentials = async (options, profile) => Promise.resolve().then(() => __toESM(require_dist_cjs64())).then(({ fromProcess }) => fromProcess({
     ...options,
     profile
   })().then((creds) => client.setCredentialFeature(creds, "CREDENTIALS_PROFILE_PROCESS", "v")));
   var resolveSsoCredentials = async (profile, profileData, options = {}, callerClientConfig) => {
-    const { fromSSO } = await Promise.resolve().then(() => __toESM(require_dist_cjs49()));
+    const { fromSSO } = await Promise.resolve().then(() => __toESM(require_dist_cjs61()));
     return fromSSO({
       profile,
       logger: options.logger,
@@ -20503,7 +22570,7 @@ var require_dist_cjs53 = __commonJS((exports2) => {
     return client.setCredentialFeature(credentials, "CREDENTIALS_PROFILE", "n");
   };
   var isWebIdentityProfile = (arg) => Boolean(arg) && typeof arg === "object" && typeof arg.web_identity_token_file === "string" && typeof arg.role_arn === "string" && ["undefined", "string"].indexOf(typeof arg.role_session_name) > -1;
-  var resolveWebIdentityCredentials = async (profile, options, callerClientConfig) => Promise.resolve().then(() => __toESM(require_dist_cjs52())).then(({ fromTokenFile }) => fromTokenFile({
+  var resolveWebIdentityCredentials = async (profile, options, callerClientConfig) => Promise.resolve().then(() => __toESM(require_dist_cjs65())).then(({ fromTokenFile }) => fromTokenFile({
     webIdentityTokenFile: profile.web_identity_token_file,
     roleArn: profile.role_arn,
     roleSessionName: profile.role_session_name,
@@ -20549,16 +22616,16 @@ var require_dist_cjs53 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-node/dist-cjs/index.js
-var require_dist_cjs54 = __commonJS((exports2) => {
-  var credentialProviderEnv = require_dist_cjs38();
-  var propertyProvider = require_dist_cjs29();
-  var sharedIniFileLoader = require_dist_cjs30();
+var require_dist_cjs67 = __commonJS((exports2) => {
+  var credentialProviderEnv = require_dist_cjs48();
+  var propertyProvider = require_dist_cjs35();
+  var sharedIniFileLoader = require_dist_cjs36();
   var ENV_IMDS_DISABLED = "AWS_EC2_METADATA_DISABLED";
   var remoteProvider = async (init) => {
-    const { ENV_CMDS_FULL_URI, ENV_CMDS_RELATIVE_URI, fromContainerMetadata, fromInstanceMetadata } = await Promise.resolve().then(() => __toESM(require_dist_cjs39()));
+    const { ENV_CMDS_FULL_URI, ENV_CMDS_RELATIVE_URI, fromContainerMetadata, fromInstanceMetadata } = await Promise.resolve().then(() => __toESM(require_dist_cjs49()));
     if (process.env[ENV_CMDS_RELATIVE_URI] || process.env[ENV_CMDS_FULL_URI]) {
       init.logger?.debug("@aws-sdk/credential-provider-node - remoteProvider::fromHttp/fromContainerMetadata");
-      const { fromHttp } = await Promise.resolve().then(() => __toESM(require_dist_cjs40()));
+      const { fromHttp } = await Promise.resolve().then(() => __toESM(require_dist_cjs51()));
       return propertyProvider.chain(fromHttp(init), fromContainerMetadata(init));
     }
     if (process.env[ENV_IMDS_DISABLED] && process.env[ENV_IMDS_DISABLED] !== "false") {
@@ -20657,22 +22724,22 @@ var require_dist_cjs54 = __commonJS((exports2) => {
       if (!ssoStartUrl && !ssoAccountId && !ssoRegion && !ssoRoleName && !ssoSession) {
         throw new propertyProvider.CredentialsProviderError("Skipping SSO provider in default chain (inputs do not include SSO fields).", { logger: init.logger });
       }
-      const { fromSSO } = await Promise.resolve().then(() => __toESM(require_dist_cjs49()));
+      const { fromSSO } = await Promise.resolve().then(() => __toESM(require_dist_cjs61()));
       return fromSSO(init)(awsIdentityProperties);
     },
     async (awsIdentityProperties) => {
       init.logger?.debug("@aws-sdk/credential-provider-node - defaultProvider::fromIni");
-      const { fromIni } = await Promise.resolve().then(() => __toESM(require_dist_cjs53()));
+      const { fromIni } = await Promise.resolve().then(() => __toESM(require_dist_cjs66()));
       return fromIni(init)(awsIdentityProperties);
     },
     async (awsIdentityProperties) => {
       init.logger?.debug("@aws-sdk/credential-provider-node - defaultProvider::fromProcess");
-      const { fromProcess } = await Promise.resolve().then(() => __toESM(require_dist_cjs51()));
+      const { fromProcess } = await Promise.resolve().then(() => __toESM(require_dist_cjs64()));
       return fromProcess(init)(awsIdentityProperties);
     },
     async (awsIdentityProperties) => {
       init.logger?.debug("@aws-sdk/credential-provider-node - defaultProvider::fromTokenFile");
-      const { fromTokenFile } = await Promise.resolve().then(() => __toESM(require_dist_cjs52()));
+      const { fromTokenFile } = await Promise.resolve().then(() => __toESM(require_dist_cjs65()));
       return fromTokenFile(init)(awsIdentityProperties);
     },
     async () => {
@@ -20729,8 +22796,8 @@ var require_ruleset5 = __commonJS((exports2) => {
 var require_endpointResolver5 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset5();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -20750,7 +22817,7 @@ var require_endpointResolver5 = __commonJS((exports2) => {
 var require_SSMServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.SSMServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -31978,10 +34045,10 @@ var require_runtimeConfig_shared5 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider();
   var endpointResolver_1 = require_endpointResolver5();
   var schemas_0_1 = require_schemas_05();
@@ -32027,17 +34094,17 @@ var require_runtimeConfig5 = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var credential_provider_node_1 = require_dist_cjs54();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var credential_provider_node_1 = require_dist_cjs67();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared5();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -32075,8 +34142,167 @@ var require_runtimeConfig5 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = getRuntimeConfig;
 });
 
+// node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs68 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@smithy/util-waiter/dist-cjs/index.js
-var require_dist_cjs55 = __commonJS((exports2) => {
+var require_dist_cjs69 = __commonJS((exports2) => {
   var getCircularReplacer = () => {
     const seen = new WeakSet;
     return (key, value) => {
@@ -32244,24 +34470,24 @@ var require_dist_cjs55 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/client-ssm/dist-cjs/index.js
-var require_dist_cjs56 = __commonJS((exports2) => {
+var require_dist_cjs70 = __commonJS((exports2) => {
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
-  var middlewareRecursionDetection = require_dist_cjs5();
-  var middlewareUserAgent = require_dist_cjs25();
-  var configResolver = require_dist_cjs27();
-  var core = require_dist_cjs20();
+  var middlewareRecursionDetection = require_dist_cjs6();
+  var middlewareUserAgent = require_dist_cjs30();
+  var configResolver = require_dist_cjs32();
+  var core = require_dist_cjs24();
   var schema = require_schema();
-  var middlewareContentLength = require_dist_cjs28();
-  var middlewareEndpoint = require_dist_cjs33();
-  var middlewareRetry = require_dist_cjs36();
-  var smithyClient = require_dist_cjs35();
+  var middlewareContentLength = require_dist_cjs34();
+  var middlewareEndpoint = require_dist_cjs40();
+  var middlewareRetry = require_dist_cjs44();
+  var smithyClient = require_dist_cjs43();
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider();
   var runtimeConfig = require_runtimeConfig5();
-  var regionConfigResolver = require_dist_cjs47();
-  var protocolHttp = require_dist_cjs2();
+  var regionConfigResolver = require_dist_cjs58();
+  var protocolHttp = require_dist_cjs68();
   var schemas_0 = require_schemas_05();
-  var utilWaiter = require_dist_cjs55();
+  var utilWaiter = require_dist_cjs69();
   var errors = require_errors5();
   var SSMServiceException = require_SSMServiceException();
   var resolveClientEndpointParameters = (options) => {
@@ -34424,7 +36650,7 @@ var require_dist_cjs56 = __commonJS((exports2) => {
 var require_createCredentialChain = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.propertyProviderChain = exports2.createCredentialChain = undefined;
-  var property_provider_1 = require_dist_cjs29();
+  var property_provider_1 = require_dist_cjs35();
   var createCredentialChain = (...credentialProviders) => {
     let expireAfter = -1;
     const baseFunction = async (awsIdentityProperties) => {
@@ -34472,7 +36698,7 @@ var require_httpAuthSchemeProvider6 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.defaultCognitoIdentityHttpAuthSchemeProvider = exports2.defaultCognitoIdentityHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_middleware_1 = require_dist_cjs6();
+  var util_middleware_1 = require_dist_cjs8();
   var defaultCognitoIdentityHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
       operation: (0, util_middleware_1.getSmithyContext)(context).operation,
@@ -34706,8 +36932,8 @@ var require_ruleset6 = __commonJS((exports2) => {
 var require_endpointResolver6 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset6();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -34727,7 +36953,7 @@ var require_endpointResolver6 = __commonJS((exports2) => {
 var require_CognitoIdentityServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.CognitoIdentityServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -34993,11 +37219,11 @@ var require_runtimeConfig_shared6 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var core_1 = require_dist_cjs20();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var core_1 = require_dist_cjs24();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider6();
   var endpointResolver_1 = require_endpointResolver6();
   var schemas_0_1 = require_schemas_06();
@@ -35048,16 +37274,16 @@ var require_runtimeConfig6 = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package2());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared6();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -35098,19 +37324,19 @@ var require_runtimeConfig6 = __commonJS((exports2) => {
 var require_cognito_identity = __commonJS((exports2) => {
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
-  var middlewareRecursionDetection = require_dist_cjs5();
-  var middlewareUserAgent = require_dist_cjs25();
-  var configResolver = require_dist_cjs27();
-  var core = require_dist_cjs20();
+  var middlewareRecursionDetection = require_dist_cjs6();
+  var middlewareUserAgent = require_dist_cjs30();
+  var configResolver = require_dist_cjs32();
+  var core = require_dist_cjs24();
   var schema = require_schema();
-  var middlewareContentLength = require_dist_cjs28();
-  var middlewareEndpoint = require_dist_cjs33();
-  var middlewareRetry = require_dist_cjs36();
-  var smithyClient = require_dist_cjs35();
+  var middlewareContentLength = require_dist_cjs34();
+  var middlewareEndpoint = require_dist_cjs40();
+  var middlewareRetry = require_dist_cjs44();
+  var smithyClient = require_dist_cjs43();
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider6();
   var runtimeConfig = require_runtimeConfig6();
-  var regionConfigResolver = require_dist_cjs47();
-  var protocolHttp = require_dist_cjs2();
+  var regionConfigResolver = require_dist_cjs58();
+  var protocolHttp = require_dist_cjs59();
   var schemas_0 = require_schemas_06();
   var errors = require_errors6();
   var CognitoIdentityServiceException = require_CognitoIdentityServiceException();
@@ -35256,8 +37482,8 @@ var require_loadCognitoIdentity_C_kPrLZ4 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-provider-cognito-identity/dist-cjs/index.js
-var require_dist_cjs57 = __commonJS((exports2) => {
-  var propertyProvider = require_dist_cjs29();
+var require_dist_cjs71 = __commonJS((exports2) => {
+  var propertyProvider = require_dist_cjs35();
   function resolveLogins(logins) {
     return Promise.all(Object.keys(logins).reduce((arr, name) => {
       const tokenOrProvider = logins[name];
@@ -35455,7 +37681,7 @@ var require_dist_cjs57 = __commonJS((exports2) => {
 var require_fromCognitoIdentity = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromCognitoIdentity = undefined;
-  var credential_provider_cognito_identity_1 = require_dist_cjs57();
+  var credential_provider_cognito_identity_1 = require_dist_cjs71();
   var fromCognitoIdentity = (options) => (0, credential_provider_cognito_identity_1.fromCognitoIdentity)({
     ...options
   });
@@ -35466,7 +37692,7 @@ var require_fromCognitoIdentity = __commonJS((exports2) => {
 var require_fromCognitoIdentityPool = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromCognitoIdentityPool = undefined;
-  var credential_provider_cognito_identity_1 = require_dist_cjs57();
+  var credential_provider_cognito_identity_1 = require_dist_cjs71();
   var fromCognitoIdentityPool = (options) => (0, credential_provider_cognito_identity_1.fromCognitoIdentityPool)({
     ...options
   });
@@ -35477,7 +37703,7 @@ var require_fromCognitoIdentityPool = __commonJS((exports2) => {
 var require_fromContainerMetadata = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromContainerMetadata = undefined;
-  var credential_provider_imds_1 = require_dist_cjs39();
+  var credential_provider_imds_1 = require_dist_cjs49();
   var fromContainerMetadata = (init) => {
     init?.logger?.debug("@smithy/credential-provider-imds", "fromContainerMetadata");
     return (0, credential_provider_imds_1.fromContainerMetadata)(init);
@@ -35489,7 +37715,7 @@ var require_fromContainerMetadata = __commonJS((exports2) => {
 var require_fromEnv = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromEnv = undefined;
-  var credential_provider_env_1 = require_dist_cjs38();
+  var credential_provider_env_1 = require_dist_cjs48();
   var fromEnv = (init) => (0, credential_provider_env_1.fromEnv)(init);
   exports2.fromEnv = fromEnv;
 });
@@ -35498,7 +37724,7 @@ var require_fromEnv = __commonJS((exports2) => {
 var require_fromIni = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromIni = undefined;
-  var credential_provider_ini_1 = require_dist_cjs53();
+  var credential_provider_ini_1 = require_dist_cjs66();
   var fromIni = (init = {}) => (0, credential_provider_ini_1.fromIni)({
     ...init
   });
@@ -35510,7 +37736,7 @@ var require_fromInstanceMetadata = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromInstanceMetadata = undefined;
   var client_1 = require_client();
-  var credential_provider_imds_1 = require_dist_cjs39();
+  var credential_provider_imds_1 = require_dist_cjs49();
   var fromInstanceMetadata = (init) => {
     init?.logger?.debug("@smithy/credential-provider-imds", "fromInstanceMetadata");
     return async () => (0, credential_provider_imds_1.fromInstanceMetadata)(init)().then((creds) => (0, client_1.setCredentialFeature)(creds, "CREDENTIALS_IMDS", "0"));
@@ -35522,7 +37748,7 @@ var require_fromInstanceMetadata = __commonJS((exports2) => {
 var require_fromLoginCredentials = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromLoginCredentials = undefined;
-  var credential_provider_login_1 = require_dist_cjs50();
+  var credential_provider_login_1 = require_dist_cjs63();
   var fromLoginCredentials = (init) => (0, credential_provider_login_1.fromLoginCredentials)({
     ...init
   });
@@ -35533,7 +37759,7 @@ var require_fromLoginCredentials = __commonJS((exports2) => {
 var require_fromNodeProviderChain = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromNodeProviderChain = undefined;
-  var credential_provider_node_1 = require_dist_cjs54();
+  var credential_provider_node_1 = require_dist_cjs67();
   var fromNodeProviderChain = (init = {}) => (0, credential_provider_node_1.defaultProvider)({
     ...init
   });
@@ -35544,7 +37770,7 @@ var require_fromNodeProviderChain = __commonJS((exports2) => {
 var require_fromProcess = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromProcess = undefined;
-  var credential_provider_process_1 = require_dist_cjs51();
+  var credential_provider_process_1 = require_dist_cjs64();
   var fromProcess = (init) => (0, credential_provider_process_1.fromProcess)(init);
   exports2.fromProcess = fromProcess;
 });
@@ -35553,7 +37779,7 @@ var require_fromProcess = __commonJS((exports2) => {
 var require_fromSSO = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromSSO = undefined;
-  var credential_provider_sso_1 = require_dist_cjs49();
+  var credential_provider_sso_1 = require_dist_cjs61();
   var fromSSO = (init = {}) => {
     return (0, credential_provider_sso_1.fromSSO)({ ...init });
   };
@@ -35621,8 +37847,8 @@ var require_fromTemporaryCredentials_base = __commonJS((exports2) => {
   }();
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromTemporaryCredentials = undefined;
-  var core_1 = require_dist_cjs20();
-  var property_provider_1 = require_dist_cjs29();
+  var core_1 = require_dist_cjs24();
+  var property_provider_1 = require_dist_cjs35();
   var ASSUME_ROLE_DEFAULT_REGION = "us-east-1";
   var fromTemporaryCredentials = (options, credentialDefaultProvider, regionProvider) => {
     let stsClient;
@@ -35738,8 +37964,8 @@ var require_fromTemporaryCredentials_base = __commonJS((exports2) => {
 var require_fromTemporaryCredentials = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromTemporaryCredentials = undefined;
-  var config_resolver_1 = require_dist_cjs27();
-  var node_config_provider_1 = require_dist_cjs31();
+  var config_resolver_1 = require_dist_cjs32();
+  var node_config_provider_1 = require_dist_cjs37();
   var fromNodeProviderChain_1 = require_fromNodeProviderChain();
   var fromTemporaryCredentials_base_1 = require_fromTemporaryCredentials_base();
   var fromTemporaryCredentials = (options) => {
@@ -35760,7 +37986,7 @@ var require_fromTemporaryCredentials = __commonJS((exports2) => {
 var require_fromTokenFile2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromTokenFile = undefined;
-  var credential_provider_web_identity_1 = require_dist_cjs52();
+  var credential_provider_web_identity_1 = require_dist_cjs65();
   var fromTokenFile = (init = {}) => (0, credential_provider_web_identity_1.fromTokenFile)({
     ...init
   });
@@ -35771,7 +37997,7 @@ var require_fromTokenFile2 = __commonJS((exports2) => {
 var require_fromWebToken2 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromWebToken = undefined;
-  var credential_provider_web_identity_1 = require_dist_cjs52();
+  var credential_provider_web_identity_1 = require_dist_cjs65();
   var fromWebToken = (init) => (0, credential_provider_web_identity_1.fromWebToken)({
     ...init
   });
@@ -35779,7 +38005,7 @@ var require_fromWebToken2 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/credential-providers/dist-cjs/index.js
-var require_dist_cjs58 = __commonJS((exports2) => {
+var require_dist_cjs72 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.fromHttp = undefined;
   var tslib_1 = require_tslib();
@@ -35788,7 +38014,7 @@ var require_dist_cjs58 = __commonJS((exports2) => {
   tslib_1.__exportStar(require_fromCognitoIdentityPool(), exports2);
   tslib_1.__exportStar(require_fromContainerMetadata(), exports2);
   tslib_1.__exportStar(require_fromEnv(), exports2);
-  var credential_provider_http_1 = require_dist_cjs40();
+  var credential_provider_http_1 = require_dist_cjs51();
   Object.defineProperty(exports2, "fromHttp", { enumerable: true, get: function() {
     return credential_provider_http_1.fromHttp;
   } });
@@ -35808,8 +38034,8 @@ var require_httpAuthSchemeProvider7 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.defaultBedrockHttpAuthSchemeProvider = exports2.defaultBedrockHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var core_1 = require_dist_cjs20();
-  var util_middleware_1 = require_dist_cjs6();
+  var core_1 = require_dist_cjs24();
+  var util_middleware_1 = require_dist_cjs8();
   var defaultBedrockHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
       operation: (0, util_middleware_1.getSmithyContext)(context).operation,
@@ -35975,11 +38201,11 @@ var require_package3 = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-sdk/token-providers/dist-cjs/index.js
-var require_dist_cjs59 = __commonJS((exports2) => {
+var require_dist_cjs73 = __commonJS((exports2) => {
   var client = require_client();
   var httpAuthSchemes = require_httpAuthSchemes();
-  var propertyProvider = require_dist_cjs29();
-  var sharedIniFileLoader = require_dist_cjs30();
+  var propertyProvider = require_dist_cjs35();
+  var sharedIniFileLoader = require_dist_cjs36();
   var node_fs = require("node:fs");
   var fromEnvSigningName = ({ logger: logger2, signingName } = {}) => async () => {
     logger2?.debug?.("@aws-sdk/token-providers - fromEnvSigningName");
@@ -36151,8 +38377,8 @@ var require_ruleset7 = __commonJS((exports2) => {
 var require_endpointResolver7 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset7();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -36172,7 +38398,7 @@ var require_endpointResolver7 = __commonJS((exports2) => {
 var require_BedrockServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.BedrockServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -43390,11 +45616,11 @@ var require_runtimeConfig_shared7 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var core_1 = require_dist_cjs20();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var core_1 = require_dist_cjs24();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider7();
   var endpointResolver_1 = require_endpointResolver7();
   var schemas_0_1 = require_schemas_07();
@@ -43444,19 +45670,19 @@ var require_runtimeConfig7 = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package3());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var credential_provider_node_1 = require_dist_cjs54();
-  var token_providers_1 = require_dist_cjs59();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var core_1 = require_dist_cjs20();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var credential_provider_node_1 = require_dist_cjs67();
+  var token_providers_1 = require_dist_cjs73();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var core_1 = require_dist_cjs24();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared7();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -43514,22 +45740,22 @@ var require_runtimeConfig7 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/client-bedrock/dist-cjs/index.js
-var require_dist_cjs60 = __commonJS((exports2) => {
+var require_dist_cjs74 = __commonJS((exports2) => {
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
-  var middlewareRecursionDetection = require_dist_cjs5();
-  var middlewareUserAgent = require_dist_cjs25();
-  var configResolver = require_dist_cjs27();
-  var core = require_dist_cjs20();
+  var middlewareRecursionDetection = require_dist_cjs6();
+  var middlewareUserAgent = require_dist_cjs30();
+  var configResolver = require_dist_cjs32();
+  var core = require_dist_cjs24();
   var schema = require_schema();
-  var middlewareContentLength = require_dist_cjs28();
-  var middlewareEndpoint = require_dist_cjs33();
-  var middlewareRetry = require_dist_cjs36();
-  var smithyClient = require_dist_cjs35();
+  var middlewareContentLength = require_dist_cjs34();
+  var middlewareEndpoint = require_dist_cjs40();
+  var middlewareRetry = require_dist_cjs44();
+  var smithyClient = require_dist_cjs43();
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider7();
   var runtimeConfig = require_runtimeConfig7();
-  var regionConfigResolver = require_dist_cjs47();
-  var protocolHttp = require_dist_cjs2();
+  var regionConfigResolver = require_dist_cjs58();
+  var protocolHttp = require_dist_cjs68();
   var schemas_0 = require_schemas_07();
   var errors = require_errors7();
   var BedrockServiceException = require_BedrockServiceException();
@@ -44884,9 +47110,168 @@ var require_dist_cjs60 = __commonJS((exports2) => {
   });
 });
 
+// node_modules/@aws-sdk/middleware-eventstream/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs75 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@aws-sdk/middleware-eventstream/dist-cjs/index.js
-var require_dist_cjs61 = __commonJS((exports2) => {
-  var protocolHttp = require_dist_cjs2();
+var require_dist_cjs76 = __commonJS((exports2) => {
+  var protocolHttp = require_dist_cjs75();
   function resolveEventStreamConfig(input) {
     const eventSigner = input.signer;
     const messageSigner = input.signer;
@@ -44947,8 +47332,8 @@ var require_dist_cjs61 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/util-format-url/dist-cjs/index.js
-var require_dist_cjs62 = __commonJS((exports2) => {
-  var querystringBuilder = require_dist_cjs12();
+var require_dist_cjs77 = __commonJS((exports2) => {
+  var querystringBuilder = require_dist_cjs15();
   function formatUrl(request) {
     const { port, query } = request;
     let { protocol, path, hostname } = request;
@@ -44981,7 +47366,7 @@ var require_dist_cjs62 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-crypto/util/node_modules/@smithy/util-utf8/node_modules/@smithy/util-buffer-from/node_modules/@smithy/is-array-buffer/dist-cjs/index.js
-var require_dist_cjs63 = __commonJS((exports2, module2) => {
+var require_dist_cjs78 = __commonJS((exports2, module2) => {
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -45009,7 +47394,7 @@ var require_dist_cjs63 = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-crypto/util/node_modules/@smithy/util-utf8/node_modules/@smithy/util-buffer-from/dist-cjs/index.js
-var require_dist_cjs64 = __commonJS((exports2, module2) => {
+var require_dist_cjs79 = __commonJS((exports2, module2) => {
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -45034,7 +47419,7 @@ var require_dist_cjs64 = __commonJS((exports2, module2) => {
     fromString: () => fromString
   });
   module2.exports = __toCommonJS2(src_exports);
-  var import_is_array_buffer = require_dist_cjs63();
+  var import_is_array_buffer = require_dist_cjs78();
   var import_buffer = require("buffer");
   var fromArrayBuffer = /* @__PURE__ */ __name((input, offset = 0, length = input.byteLength - offset) => {
     if (!(0, import_is_array_buffer.isArrayBuffer)(input)) {
@@ -45051,7 +47436,7 @@ var require_dist_cjs64 = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-crypto/util/node_modules/@smithy/util-utf8/dist-cjs/index.js
-var require_dist_cjs65 = __commonJS((exports2, module2) => {
+var require_dist_cjs80 = __commonJS((exports2, module2) => {
   var __defProp2 = Object.defineProperty;
   var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -45077,7 +47462,7 @@ var require_dist_cjs65 = __commonJS((exports2, module2) => {
     toUtf8: () => toUtf8
   });
   module2.exports = __toCommonJS2(src_exports);
-  var import_util_buffer_from = require_dist_cjs64();
+  var import_util_buffer_from = require_dist_cjs79();
   var fromUtf8 = /* @__PURE__ */ __name((input) => {
     const buf = (0, import_util_buffer_from.fromString)(input, "utf8");
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength / Uint8Array.BYTES_PER_ELEMENT);
@@ -45106,7 +47491,7 @@ var require_dist_cjs65 = __commonJS((exports2, module2) => {
 var require_convertToBuffer = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.convertToBuffer = undefined;
-  var util_utf8_1 = require_dist_cjs65();
+  var util_utf8_1 = require_dist_cjs80();
   var fromUtf8 = typeof Buffer !== "undefined" && Buffer.from ? function(input) {
     return Buffer.from(input, "utf8");
   } : util_utf8_1.fromUtf8;
@@ -45530,9 +47915,9 @@ var require_main2 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-codec/dist-cjs/index.js
-var require_dist_cjs66 = __commonJS((exports2) => {
+var require_dist_cjs81 = __commonJS((exports2) => {
   var crc32 = require_main2();
-  var utilHexEncoding = require_dist_cjs15();
+  var utilHexEncoding = require_dist_cjs19();
 
   class Int64 {
     bytes;
@@ -45931,8 +48316,8 @@ var require_dist_cjs66 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-universal/dist-cjs/index.js
-var require_dist_cjs67 = __commonJS((exports2) => {
-  var eventstreamCodec = require_dist_cjs66();
+var require_dist_cjs82 = __commonJS((exports2) => {
+  var eventstreamCodec = require_dist_cjs81();
   function getChunkedStream(source) {
     let currentMessageTotalLength = 0;
     let currentMessagePendingLength = 0;
@@ -46056,8 +48441,8 @@ var require_dist_cjs67 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-browser/dist-cjs/index.js
-var require_dist_cjs68 = __commonJS((exports2) => {
-  var eventstreamSerdeUniversal = require_dist_cjs67();
+var require_dist_cjs83 = __commonJS((exports2) => {
+  var eventstreamSerdeUniversal = require_dist_cjs82();
   var readableStreamtoIterable = (readableStream) => ({
     [Symbol.asyncIterator]: async function* () {
       const reader = readableStream.getReader();
@@ -46111,15 +48496,174 @@ var require_dist_cjs68 = __commonJS((exports2) => {
   exports2.readableStreamtoIterable = readableStreamtoIterable;
 });
 
+// node_modules/@aws-sdk/middleware-websocket/node_modules/@smithy/protocol-http/dist-cjs/index.js
+var require_dist_cjs84 = __commonJS((exports2) => {
+  var types = require_dist_cjs();
+  var getHttpHandlerExtensionConfiguration = (runtimeConfig) => {
+    return {
+      setHttpHandler(handler) {
+        runtimeConfig.httpHandler = handler;
+      },
+      httpHandler() {
+        return runtimeConfig.httpHandler;
+      },
+      updateHttpClientConfig(key, value) {
+        runtimeConfig.httpHandler?.updateHttpClientConfig(key, value);
+      },
+      httpHandlerConfigs() {
+        return runtimeConfig.httpHandler.httpHandlerConfigs();
+      }
+    };
+  };
+  var resolveHttpHandlerRuntimeConfig = (httpHandlerExtensionConfiguration) => {
+    return {
+      httpHandler: httpHandlerExtensionConfiguration.httpHandler()
+    };
+  };
+
+  class Field {
+    name;
+    kind;
+    values;
+    constructor({ name, kind = types.FieldPosition.HEADER, values = [] }) {
+      this.name = name;
+      this.kind = kind;
+      this.values = values;
+    }
+    add(value) {
+      this.values.push(value);
+    }
+    set(values) {
+      this.values = values;
+    }
+    remove(value) {
+      this.values = this.values.filter((v) => v !== value);
+    }
+    toString() {
+      return this.values.map((v) => v.includes(",") || v.includes(" ") ? `"${v}"` : v).join(", ");
+    }
+    get() {
+      return this.values;
+    }
+  }
+
+  class Fields {
+    entries = {};
+    encoding;
+    constructor({ fields = [], encoding = "utf-8" }) {
+      fields.forEach(this.setField.bind(this));
+      this.encoding = encoding;
+    }
+    setField(field) {
+      this.entries[field.name.toLowerCase()] = field;
+    }
+    getField(name) {
+      return this.entries[name.toLowerCase()];
+    }
+    removeField(name) {
+      delete this.entries[name.toLowerCase()];
+    }
+    getByType(kind) {
+      return Object.values(this.entries).filter((field) => field.kind === kind);
+    }
+  }
+
+  class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+      this.method = options.method || "GET";
+      this.hostname = options.hostname || "localhost";
+      this.port = options.port;
+      this.query = options.query || {};
+      this.headers = options.headers || {};
+      this.body = options.body;
+      this.protocol = options.protocol ? options.protocol.slice(-1) !== ":" ? `${options.protocol}:` : options.protocol : "https:";
+      this.path = options.path ? options.path.charAt(0) !== "/" ? `/${options.path}` : options.path : "/";
+      this.username = options.username;
+      this.password = options.password;
+      this.fragment = options.fragment;
+    }
+    static clone(request) {
+      const cloned = new HttpRequest({
+        ...request,
+        headers: { ...request.headers }
+      });
+      if (cloned.query) {
+        cloned.query = cloneQuery(cloned.query);
+      }
+      return cloned;
+    }
+    static isInstance(request) {
+      if (!request) {
+        return false;
+      }
+      const req = request;
+      return "method" in req && "protocol" in req && "hostname" in req && "path" in req && typeof req["query"] === "object" && typeof req["headers"] === "object";
+    }
+    clone() {
+      return HttpRequest.clone(this);
+    }
+  }
+  function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+      const param = query[paramName];
+      return {
+        ...carry,
+        [paramName]: Array.isArray(param) ? [...param] : param
+      };
+    }, {});
+  }
+
+  class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+      this.statusCode = options.statusCode;
+      this.reason = options.reason;
+      this.headers = options.headers || {};
+      this.body = options.body;
+    }
+    static isInstance(response) {
+      if (!response)
+        return false;
+      const resp = response;
+      return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+  }
+  function isValidHostname(hostname) {
+    const hostPattern = /^[a-z0-9][a-z0-9\.\-]*[a-z0-9]$/;
+    return hostPattern.test(hostname);
+  }
+  exports2.Field = Field;
+  exports2.Fields = Fields;
+  exports2.HttpRequest = HttpRequest;
+  exports2.HttpResponse = HttpResponse;
+  exports2.getHttpHandlerExtensionConfiguration = getHttpHandlerExtensionConfiguration;
+  exports2.isValidHostname = isValidHostname;
+  exports2.resolveHttpHandlerRuntimeConfig = resolveHttpHandlerRuntimeConfig;
+});
+
 // node_modules/@aws-sdk/middleware-websocket/dist-cjs/index.js
-var require_dist_cjs69 = __commonJS((exports2) => {
-  var utilFormatUrl = require_dist_cjs62();
-  var eventstreamSerdeBrowser = require_dist_cjs68();
-  var fetchHttpHandler = require_dist_cjs14();
-  var protocolHttp = require_dist_cjs2();
-  var utilBase64 = require_dist_cjs10();
-  var eventstreamCodec = require_dist_cjs66();
-  var utilHexEncoding = require_dist_cjs15();
+var require_dist_cjs85 = __commonJS((exports2) => {
+  var utilFormatUrl = require_dist_cjs77();
+  var eventstreamSerdeBrowser = require_dist_cjs83();
+  var fetchHttpHandler = require_dist_cjs18();
+  var protocolHttp = require_dist_cjs84();
+  var utilBase64 = require_dist_cjs12();
+  var eventstreamCodec = require_dist_cjs81();
+  var utilHexEncoding = require_dist_cjs19();
   var isWebSocketRequest = (request) => request.protocol === "ws:" || request.protocol === "wss:";
   var DEFAULT_WS_CONNECTION_TIMEOUT_MS = 3000;
 
@@ -46491,7 +49035,7 @@ var require_dist_cjs69 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-config-resolver/dist-cjs/index.js
-var require_dist_cjs70 = __commonJS((exports2) => {
+var require_dist_cjs86 = __commonJS((exports2) => {
   var resolveEventStreamSerdeConfig = (input) => Object.assign(input, {
     eventStreamMarshaller: input.eventStreamSerdeProvider(input)
   });
@@ -46503,8 +49047,8 @@ var require_httpAuthSchemeProvider8 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.resolveHttpAuthSchemeConfig = exports2.defaultBedrockRuntimeHttpAuthSchemeProvider = exports2.defaultBedrockRuntimeHttpAuthSchemeParametersProvider = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var core_1 = require_dist_cjs20();
-  var util_middleware_1 = require_dist_cjs6();
+  var core_1 = require_dist_cjs24();
+  var util_middleware_1 = require_dist_cjs8();
   var defaultBedrockRuntimeHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
       operation: (0, util_middleware_1.getSmithyContext)(context).operation,
@@ -46687,8 +49231,8 @@ var require_package4 = __commonJS((exports2, module2) => {
 });
 
 // node_modules/@aws-sdk/eventstream-handler-node/dist-cjs/index.js
-var require_dist_cjs71 = __commonJS((exports2) => {
-  var eventstreamCodec = require_dist_cjs66();
+var require_dist_cjs87 = __commonJS((exports2) => {
+  var eventstreamCodec = require_dist_cjs81();
   var node_stream = require("node:stream");
 
   class EventSigningTransformStream extends node_stream.Transform {
@@ -46802,8 +49346,8 @@ var require_dist_cjs71 = __commonJS((exports2) => {
 });
 
 // node_modules/@smithy/eventstream-serde-node/dist-cjs/index.js
-var require_dist_cjs72 = __commonJS((exports2) => {
-  var eventstreamSerdeUniversal = require_dist_cjs67();
+var require_dist_cjs88 = __commonJS((exports2) => {
+  var eventstreamSerdeUniversal = require_dist_cjs82();
   var stream = require("stream");
   async function* readabletoIterable(readStream) {
     let streamEnded = false;
@@ -46887,8 +49431,8 @@ var require_ruleset8 = __commonJS((exports2) => {
 var require_endpointResolver8 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.defaultEndpointResolver = undefined;
-  var util_endpoints_1 = require_dist_cjs22();
-  var util_endpoints_2 = require_dist_cjs21();
+  var util_endpoints_1 = require_dist_cjs26();
+  var util_endpoints_2 = require_dist_cjs25();
   var ruleset_1 = require_ruleset8();
   var cache = new util_endpoints_2.EndpointCache({
     size: 50,
@@ -46908,7 +49452,7 @@ var require_endpointResolver8 = __commonJS((exports2) => {
 var require_BedrockRuntimeServiceException = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.BedrockRuntimeServiceException = exports2.__ServiceException = undefined;
-  var smithy_client_1 = require_dist_cjs35();
+  var smithy_client_1 = require_dist_cjs43();
   Object.defineProperty(exports2, "__ServiceException", { enumerable: true, get: function() {
     return smithy_client_1.ServiceException;
   } });
@@ -49420,11 +51964,11 @@ var require_runtimeConfig_shared8 = __commonJS((exports2) => {
   exports2.getRuntimeConfig = undefined;
   var httpAuthSchemes_1 = require_httpAuthSchemes();
   var protocols_1 = require_protocols2();
-  var core_1 = require_dist_cjs20();
-  var smithy_client_1 = require_dist_cjs35();
-  var url_parser_1 = require_dist_cjs18();
-  var util_base64_1 = require_dist_cjs10();
-  var util_utf8_1 = require_dist_cjs9();
+  var core_1 = require_dist_cjs24();
+  var smithy_client_1 = require_dist_cjs43();
+  var url_parser_1 = require_dist_cjs22();
+  var util_base64_1 = require_dist_cjs12();
+  var util_utf8_1 = require_dist_cjs11();
   var httpAuthSchemeProvider_1 = require_httpAuthSchemeProvider8();
   var endpointResolver_1 = require_endpointResolver8();
   var schemas_0_1 = require_schemas_08();
@@ -49474,21 +52018,21 @@ var require_runtimeConfig8 = __commonJS((exports2) => {
   var package_json_1 = tslib_1.__importDefault(require_package4());
   var client_1 = require_client();
   var httpAuthSchemes_1 = require_httpAuthSchemes();
-  var credential_provider_node_1 = require_dist_cjs54();
-  var eventstream_handler_node_1 = require_dist_cjs71();
-  var token_providers_1 = require_dist_cjs59();
-  var util_user_agent_node_1 = require_dist_cjs41();
-  var config_resolver_1 = require_dist_cjs27();
-  var core_1 = require_dist_cjs20();
-  var eventstream_serde_node_1 = require_dist_cjs72();
-  var hash_node_1 = require_dist_cjs42();
-  var middleware_retry_1 = require_dist_cjs36();
-  var node_config_provider_1 = require_dist_cjs31();
-  var node_http_handler_1 = require_dist_cjs13();
-  var smithy_client_1 = require_dist_cjs35();
-  var util_body_length_node_1 = require_dist_cjs43();
-  var util_defaults_mode_node_1 = require_dist_cjs44();
-  var util_retry_1 = require_dist_cjs24();
+  var credential_provider_node_1 = require_dist_cjs67();
+  var eventstream_handler_node_1 = require_dist_cjs87();
+  var token_providers_1 = require_dist_cjs73();
+  var util_user_agent_node_1 = require_dist_cjs52();
+  var config_resolver_1 = require_dist_cjs32();
+  var core_1 = require_dist_cjs24();
+  var eventstream_serde_node_1 = require_dist_cjs88();
+  var hash_node_1 = require_dist_cjs53();
+  var middleware_retry_1 = require_dist_cjs44();
+  var node_config_provider_1 = require_dist_cjs37();
+  var node_http_handler_1 = require_dist_cjs16();
+  var smithy_client_1 = require_dist_cjs43();
+  var util_body_length_node_1 = require_dist_cjs54();
+  var util_defaults_mode_node_1 = require_dist_cjs55();
+  var util_retry_1 = require_dist_cjs29();
   var runtimeConfig_shared_1 = require_runtimeConfig_shared8();
   var getRuntimeConfig = (config) => {
     (0, smithy_client_1.emitWarningIfUnsupportedVersion)(process.version);
@@ -49551,25 +52095,25 @@ var require_runtimeConfig8 = __commonJS((exports2) => {
 });
 
 // node_modules/@aws-sdk/client-bedrock-runtime/dist-cjs/index.js
-var require_dist_cjs73 = __commonJS((exports2) => {
-  var middlewareEventstream = require_dist_cjs61();
+var require_dist_cjs89 = __commonJS((exports2) => {
+  var middlewareEventstream = require_dist_cjs76();
   var middlewareHostHeader = require_dist_cjs3();
   var middlewareLogger = require_dist_cjs4();
-  var middlewareRecursionDetection = require_dist_cjs5();
-  var middlewareUserAgent = require_dist_cjs25();
-  var middlewareWebsocket = require_dist_cjs69();
-  var configResolver = require_dist_cjs27();
-  var core = require_dist_cjs20();
+  var middlewareRecursionDetection = require_dist_cjs6();
+  var middlewareUserAgent = require_dist_cjs30();
+  var middlewareWebsocket = require_dist_cjs85();
+  var configResolver = require_dist_cjs32();
+  var core = require_dist_cjs24();
   var schema = require_schema();
-  var eventstreamSerdeConfigResolver = require_dist_cjs70();
-  var middlewareContentLength = require_dist_cjs28();
-  var middlewareEndpoint = require_dist_cjs33();
-  var middlewareRetry = require_dist_cjs36();
-  var smithyClient = require_dist_cjs35();
+  var eventstreamSerdeConfigResolver = require_dist_cjs86();
+  var middlewareContentLength = require_dist_cjs34();
+  var middlewareEndpoint = require_dist_cjs40();
+  var middlewareRetry = require_dist_cjs44();
+  var smithyClient = require_dist_cjs43();
   var httpAuthSchemeProvider = require_httpAuthSchemeProvider8();
   var runtimeConfig = require_runtimeConfig8();
-  var regionConfigResolver = require_dist_cjs47();
-  var protocolHttp = require_dist_cjs2();
+  var regionConfigResolver = require_dist_cjs58();
+  var protocolHttp = require_dist_cjs68();
   var schemas_0 = require_schemas_08();
   var errors = require_errors8();
   var BedrockRuntimeServiceException = require_BedrockRuntimeServiceException();
@@ -50634,7 +53178,7 @@ var require_tikTokenizer = __commonJS((exports2) => {
 
 // node_modules/@microsoft/tiktokenizer/dist/tokenizerBuilder.js
 var require_tokenizerBuilder = __commonJS((exports2) => {
-  var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/node_modules/@microsoft/tiktokenizer/dist";
+  var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\node_modules\\@microsoft\\tiktokenizer\\dist";
   Object.defineProperty(exports2, "__esModule", { value: true });
   exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.MODEL_TO_ENCODING = undefined;
   var tikTokenizer_1 = require_tikTokenizer();
@@ -50884,13 +53428,13 @@ module.exports = __toCommonJS(exports_extension);
 var vscode8 = __toESM(require("vscode"));
 
 // src/commands/manage-settings.ts
-var import_client_ssm = __toESM(require_dist_cjs56(), 1);
-var import_credential_providers = __toESM(require_dist_cjs58(), 1);
-var import_node_http_handler = __toESM(require_dist_cjs13(), 1);
+var import_client_ssm = __toESM(require_dist_cjs70(), 1);
+var import_credential_providers = __toESM(require_dist_cjs72(), 1);
+var import_node_http_handler = __toESM(require_dist_cjs16(), 1);
 var vscode3 = __toESM(require("vscode"));
 
 // src/aws-profiles.ts
-var import_shared_ini_file_loader = __toESM(require_dist_cjs30(), 1);
+var import_shared_ini_file_loader = __toESM(require_dist_cjs36(), 1);
 async function getProfileRegion(profileName, init) {
   try {
     const { configFile } = await import_shared_ini_file_loader.loadSharedConfigFiles(init);
@@ -50981,9 +53525,6 @@ async function getBedrockSettings(globalState) {
   } else {
     preferredModel = preferredModelInspect.globalValue ?? undefined;
   }
-  const context1MInspect = config.inspect("context1M.enabled");
-  const context1MExplicitlySet = context1MInspect?.workspaceFolderValue !== undefined || context1MInspect?.workspaceValue !== undefined || context1MInspect?.globalValue !== undefined;
-  const context1MEnabled = config.get("context1M.enabled") ?? true;
   const promptCachingEnabled = config.get("promptCaching.enabled") ?? true;
   const preferRegionalInferenceProfiles = config.get("inferenceProfiles.preferRegional") ?? false;
   const copilotConfig = vscode2.workspace.getConfiguration("github.copilot.chat.anthropic");
@@ -50998,10 +53539,6 @@ async function getBedrockSettings(globalState) {
   const rawDisplay = config.get("thinking.display");
   const thinkingDisplay = rawDisplay && validDisplayValues.includes(rawDisplay) ? rawDisplay : "summarized";
   return {
-    context1M: {
-      enabled: context1MEnabled,
-      explicitlySet: context1MExplicitlySet
-    },
     inferenceProfiles: {
       preferRegional: preferRegionalInferenceProfiles
     },
@@ -51125,7 +53662,6 @@ async function clearAllSettings(config, secrets, globalState) {
     "region",
     "preferredModel",
     "promptCaching.enabled",
-    "context1M.enabled",
     "thinking.enabled",
     "thinking.budgetTokens"
   ];
@@ -51406,7 +53942,7 @@ async function resolveSsmCredentials(globalState, secrets) {
 }
 
 // src/provider.ts
-var import_client_bedrock2 = __toESM(require_dist_cjs60(), 1);
+var import_client_bedrock2 = __toESM(require_dist_cjs74(), 1);
 var import_node_util2 = require("node:util");
 var vscode7 = __toESM(require("vscode"));
 
@@ -51440,11 +53976,11 @@ function supportsGlobalInferenceProfiles(partition) {
 }
 
 // src/bedrock-client.ts
-var import_client_bedrock = __toESM(require_dist_cjs60(), 1);
-var import_client_bedrock_runtime = __toESM(require_dist_cjs73(), 1);
-var import_credential_providers2 = __toESM(require_dist_cjs58(), 1);
-var import_node_http_handler2 = __toESM(require_dist_cjs13(), 1);
-var import_util_retry = __toESM(require_dist_cjs24(), 1);
+var import_client_bedrock = __toESM(require_dist_cjs74(), 1);
+var import_client_bedrock_runtime = __toESM(require_dist_cjs89(), 1);
+var import_credential_providers2 = __toESM(require_dist_cjs72(), 1);
+var import_node_http_handler2 = __toESM(require_dist_cjs16(), 1);
+var import_util_retry = __toESM(require_dist_cjs29(), 1);
 class BedrockAPIClient {
   static LIST_FOUNDATION_MODELS_COOLDOWN_MS = 30 * 60 * 1000;
   static LIST_FOUNDATION_MODELS_MAX_RETRIES = 3;
@@ -52064,7 +54600,7 @@ function createBearerTokenSigner(apiKey) {
 }
 
 // src/converters/messages.ts
-var import_client_bedrock_runtime2 = __toESM(require_dist_cjs73(), 1);
+var import_client_bedrock_runtime2 = __toESM(require_dist_cjs89(), 1);
 var import_node_util = require("node:util");
 var vscode4 = __toESM(require("vscode"));
 
@@ -52203,53 +54739,45 @@ function getAnthropicProfile(modelId) {
     toolResultFormat: "text"
   };
 }
+function copilotAlignedLimits(contextWindow, nativeMaxOutput) {
+  const reserve = Math.floor(Math.min(nativeMaxOutput, contextWindow * 0.15));
+  return { maxInputTokens: contextWindow - reserve, maxOutputTokens: reserve };
+}
 function getClaudeTokenLimits(normalizedModelId, enable1MContext) {
   if (normalizedModelId.includes("opus-4-8") || normalizedModelId.includes("opus-4-7") || normalizedModelId.includes("sonnet-5")) {
-    return {
-      maxInputTokens: (enable1MContext ? 1e6 : 200000) - 128000,
-      maxOutputTokens: 128000
-    };
+    return copilotAlignedLimits(enable1MContext ? 1e6 : 200000, 128000);
   }
   if (normalizedModelId.includes("opus-4-6")) {
-    return {
-      maxInputTokens: (enable1MContext ? 1e6 : 200000) - 128000,
-      maxOutputTokens: 128000
-    };
+    return copilotAlignedLimits(enable1MContext ? 1e6 : 200000, 128000);
   }
   if (normalizedModelId.includes("sonnet-4-6")) {
-    return {
-      maxInputTokens: (enable1MContext ? 1e6 : 200000) - 64000,
-      maxOutputTokens: 64000
-    };
+    return copilotAlignedLimits(enable1MContext ? 1e6 : 200000, 64000);
   }
   if (normalizedModelId.includes("sonnet-4")) {
-    return {
-      maxInputTokens: (enable1MContext ? 1e6 : 200000) - 64000,
-      maxOutputTokens: 64000
-    };
+    return copilotAlignedLimits(enable1MContext ? 1e6 : 200000, 64000);
   }
   if (normalizedModelId.includes("sonnet-3-7") || normalizedModelId.includes("sonnet-3.7")) {
-    return { maxInputTokens: 200000 - 64000, maxOutputTokens: 64000 };
+    return copilotAlignedLimits(200000, 64000);
   }
   if (normalizedModelId.includes("opus-4")) {
-    return { maxInputTokens: 200000 - 64000, maxOutputTokens: 64000 };
+    return copilotAlignedLimits(200000, 64000);
   }
   if (normalizedModelId.includes("haiku-4-5") || normalizedModelId.includes("haiku-4.5")) {
-    return { maxInputTokens: 200000 - 64000, maxOutputTokens: 64000 };
+    return copilotAlignedLimits(200000, 64000);
   }
   if (normalizedModelId.includes("haiku-3-5") || normalizedModelId.includes("haiku-3.5")) {
-    return { maxInputTokens: 200000 - 8192, maxOutputTokens: 8192 };
+    return copilotAlignedLimits(200000, 8192);
   }
   if (normalizedModelId.includes("haiku-3")) {
-    return { maxInputTokens: 200000 - 4096, maxOutputTokens: 4096 };
+    return copilotAlignedLimits(200000, 4096);
   }
   if (normalizedModelId.includes("sonnet-3-5") || normalizedModelId.includes("sonnet-3.5")) {
-    return { maxInputTokens: 200000 - 8192, maxOutputTokens: 8192 };
+    return copilotAlignedLimits(200000, 8192);
   }
   if (normalizedModelId.includes("opus-3")) {
-    return { maxInputTokens: 200000 - 4096, maxOutputTokens: 4096 };
+    return copilotAlignedLimits(200000, 4096);
   }
-  return { maxInputTokens: 196000, maxOutputTokens: 4096 };
+  return copilotAlignedLimits(200000, 4096);
 }
 function normalizeModelId(modelId) {
   const parts = modelId.split(".");
@@ -52612,7 +55140,7 @@ function processUserMessageParts(msg, profile) {
 }
 
 // src/converters/tools.ts
-var import_client_bedrock_runtime3 = __toESM(require_dist_cjs73(), 1);
+var import_client_bedrock_runtime3 = __toESM(require_dist_cjs89(), 1);
 var import_vscode = require("vscode");
 
 // src/converters/schema.ts
@@ -52663,7 +55191,7 @@ function convertTools(options, modelId, extendedThinkingEnabled, promptCachingEn
 }
 
 // src/stream-processor.ts
-var import_client_bedrock_runtime4 = __toESM(require_dist_cjs73(), 1);
+var import_client_bedrock_runtime4 = __toESM(require_dist_cjs89(), 1);
 var vscode5 = __toESM(require("vscode"));
 
 // src/tool-buffer.ts
@@ -53085,7 +55613,7 @@ var import_tiktokenizer = __toESM(require_dist(), 1);
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
 var vscode6 = __toESM(require("vscode"));
-var __dirname = "/Users/zhenxz/projects/amazon-bedrock-copilot-chat/src";
+var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\src";
 var ENCODER = "o200k_base";
 var RANK_FILE_NAME = "o200k_base.tiktoken";
 var CACHE_SIZE = 5000;
@@ -53205,7 +55733,7 @@ function encodeOrEstimate(text) {
 }
 
 // src/validation.ts
-var import_client_bedrock_runtime5 = __toESM(require_dist_cjs73(), 1);
+var import_client_bedrock_runtime5 = __toESM(require_dist_cjs89(), 1);
 function validateBedrockMessages(messages) {
   if (messages.length === 0) {
     throw new Error("Messages array cannot be empty");
@@ -53236,6 +55764,7 @@ var BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
 class BedrockChatModelProvider {
   secrets;
   globalState;
+  static CONTEXT_SELECTION_MIGRATION_KEY = "bedrock.contextSelection.clearedStale1M";
   static CONTEXT_SELECTION_STATE_KEY = "bedrock.contextSelection.byModel";
   static MODEL_CHANGE_ECHO_WINDOW_MS = 5000;
   _onDidChangeLanguageModelInformation = new vscode7.EventEmitter;
@@ -53277,6 +55806,7 @@ class BedrockChatModelProvider {
   }
   async prepareLanguageModelChatInformation(options, token) {
     const settings = await getBedrockSettings(this.globalState);
+    await this.migrateStaleContextSelections();
     const hasRunBefore = this.globalState.get("bedrock.hasRunBefore", false);
     if (!hasRunBefore && !options.silent) {
       const action = await vscode7.window.showInformationMessage("Amazon Bedrock integration requires AWS credentials. Would you like to configure your AWS profile and region first?", "Configure Settings", "Use Default Credentials");
@@ -53335,7 +55865,7 @@ class BedrockChatModelProvider {
               logger.debug(`[Bedrock Model Provider] Excluding inaccessible model: ${modelIdToUse} (not authorized or not available)`);
               continue;
             }
-            const context1MEnabled = this.resolveContext1MEnabled(modelIdToUse, settings.context1M.enabled);
+            const context1MEnabled = this.resolveContext1MEnabled(modelIdToUse);
             const limits = getModelTokenLimits(modelIdToUse, context1MEnabled);
             const maxInput = limits.maxInputTokens;
             const maxOutput = limits.maxOutputTokens;
@@ -53371,7 +55901,7 @@ class BedrockChatModelProvider {
               continue;
             }
             const modelIdForLimits = profile.baseModelId ?? profile.modelId;
-            const context1MEnabled = this.resolveContext1MEnabled(profile.modelArn, settings.context1M.enabled);
+            const context1MEnabled = this.resolveContext1MEnabled(profile.modelArn);
             const limits = getModelTokenLimits(modelIdForLimits, context1MEnabled);
             const maxInput = limits.maxInputTokens;
             const maxOutput = limits.maxOutputTokens;
@@ -53421,7 +55951,7 @@ class BedrockChatModelProvider {
           if (infos.length === 0) {
             throw new NoAccessibleModelsError;
           }
-          const reconciled = await this.reconcilePersistedContextSelections(infos.map((info) => info.id), settings);
+          const reconciled = await this.reconcilePersistedContextSelections(infos.map((info) => info.id));
           if (reconciled) {
             logger.info("[Bedrock Model Provider] Persisted context selections reconciled; refreshing model info");
             this.notifyModelInformationChanged("context selection reconciliation");
@@ -53433,7 +55963,6 @@ class BedrockChatModelProvider {
           this.lastKnownModels = infos;
           this.initialFetchComplete = true;
           logger.debug("[Bedrock Model Provider] Models rebuilt with effective token limits:", {
-            context1MEnabled: settings.context1M.enabled,
             models: infos.map((info) => ({
               id: info.id,
               maxInputTokens: info.maxInputTokens,
@@ -53467,7 +55996,7 @@ class BedrockChatModelProvider {
             prompt: "Model listing is blocked by AWS permissions. Enter a Bedrock model ID or inference profile ID to use."
           });
           if (manualModelId) {
-            const manualInfo = await this.buildManualModelInformation(manualModelId, settings, token);
+            const manualInfo = await this.buildManualModelInformation(manualModelId, token);
             if (manualInfo) {
               this.chatEndpoints = [
                 {
@@ -53486,7 +56015,7 @@ class BedrockChatModelProvider {
             prompt: "No accessible Bedrock models were detected. Enter a Bedrock model ID or inference profile ID to use."
           });
           if (manualModelId) {
-            const manualInfo = await this.buildManualModelInformation(manualModelId, settings, token);
+            const manualInfo = await this.buildManualModelInformation(manualModelId, token);
             if (manualInfo) {
               this.chatEndpoints = [
                 {
@@ -53560,11 +56089,10 @@ class BedrockChatModelProvider {
       logger.debug("[Bedrock Model Provider] Incoming modelConfiguration:", {
         modelConfiguration: options.modelConfiguration ?? "(none)",
         modelId: model.id,
-        persistedContextSelection: this.getPersistedContextSelection(model.id) ?? "(none)",
-        workspaceContext1MEnabled: settings.context1M.enabled
+        persistedContextSelection: this.getPersistedContextSelection(model.id) ?? "(none)"
       });
-      this.applyModelConfigurationOverrides(model.id, settings, options.modelConfiguration);
-      const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
+      const context1MEnabled = this.applyModelConfigurationOverrides(model.id, settings, options.modelConfiguration);
+      const modelLimits = getModelTokenLimits(baseModelId, context1MEnabled);
       const maxTokensForRequest = typeof options.modelOptions?.max_tokens === "number" ? options.modelOptions.max_tokens : modelLimits.maxOutputTokens;
       const { budgetTokens, extendedThinkingEnabled: initialThinkingEnabled } = this.calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, settings.thinking.enabled);
       let extendedThinkingEnabled = initialThinkingEnabled;
@@ -53591,7 +56119,7 @@ class BedrockChatModelProvider {
         throw new Error("Cannot have more than 128 tools per request.");
       }
       const thinkingEffortEnabled = modelProfile.supportedThinkingEfforts.length > 0;
-      const betaHeaders = this.buildBetaHeaders(modelProfile, extendedThinkingEnabled, settings.context1M.enabled, thinkingEffortEnabled);
+      const betaHeaders = this.buildBetaHeaders(modelProfile, extendedThinkingEnabled, context1MEnabled, thinkingEffortEnabled);
       const requestInput = this.buildRequestInput(model, modelProfile, converted, options, toolConfig, extendedThinkingEnabled, budgetTokens, betaHeaders, thinkingEffortEnabled ? settings.thinking.effort : undefined, modelProfile.supportsThinkingDisplay ? settings.thinking.display : undefined);
       this.logRequestDetails(requestInput);
       await this.validateTokenCount(model, requestInput, token);
@@ -53706,63 +56234,22 @@ class BedrockChatModelProvider {
       thinkingEffort: thinkingEffort && modelProfile.supportedThinkingEfforts.length > 0 ? thinkingEffort : undefined
     });
   }
-  applyContextLengthOverride(modelId, settings, modelConfiguration) {
-    const contextLength = modelConfiguration?.contextLength;
-    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
-      logger.debug("[Bedrock Model Provider] Context-size picker override received", {
-        contextLength,
-        enables1M: contextLength >= 1e6,
-        modelId
-      });
-      settings.context1M.enabled = contextLength >= 1e6;
-      this.setPersistedContextSelection(modelId, contextLength).then((changed) => {
-        if (changed) {
-          this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
-        }
-      }, (error) => {
-        logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
-          error: error instanceof Error ? error.message : String(error),
-          modelId
-        });
-      });
-      return;
-    }
-    if (contextLength !== undefined) {
-      logger.debug("[Bedrock Model Provider] Ignoring non-numeric contextLength override", {
-        contextLength,
-        modelId
-      });
-    }
-    const persisted = this.getPersistedContextSelection(modelId);
-    if (persisted !== undefined) {
-      const enabledFromPicker = persisted >= 1e6;
-      if (enabledFromPicker !== settings.context1M.enabled) {
-        logger.debug("[Bedrock Model Provider] Applying persisted context selection over workspace fallback", {
-          enables1M: enabledFromPicker,
-          modelId,
-          persistedSelection: persisted,
-          workspaceContext1MEnabled: settings.context1M.enabled
-        });
-      }
-      settings.context1M.enabled = enabledFromPicker;
-    }
-  }
   applyModelConfigurationOverrides(modelId, settings, modelConfiguration) {
-    this.applyContextLengthOverride(modelId, settings, modelConfiguration);
-    if (!modelConfiguration) {
-      return;
+    const context1MEnabled = this.resolveRequestContext1M(modelId, modelConfiguration);
+    if (modelConfiguration) {
+      if (typeof modelConfiguration.thinkingEnabled === "boolean") {
+        settings.thinking.enabled = modelConfiguration.thinkingEnabled;
+      }
+      const effort = modelConfiguration.thinkingEffort;
+      if (effort === "high" || effort === "medium" || effort === "low" || effort === "max" || effort === "xhigh") {
+        settings.thinking.effort = effort;
+      }
+      const display = modelConfiguration.thinkingDisplay;
+      if (display === "summarized" || display === "omitted") {
+        settings.thinking.display = display;
+      }
     }
-    if (typeof modelConfiguration.thinkingEnabled === "boolean") {
-      settings.thinking.enabled = modelConfiguration.thinkingEnabled;
-    }
-    const effort = modelConfiguration.thinkingEffort;
-    if (effort === "high" || effort === "medium" || effort === "low" || effort === "max" || effort === "xhigh") {
-      settings.thinking.effort = effort;
-    }
-    const display = modelConfiguration.thinkingDisplay;
-    if (display === "summarized" || display === "omitted") {
-      settings.thinking.display = display;
-    }
+    return context1MEnabled;
   }
   applyStandardExtendedThinkingFields(requestInput, modelId, budgetTokens, betaHeaders, thinkingEffort, thinkingDisplay) {
     requestInput.inferenceConfig.temperature = 1;
@@ -53803,7 +56290,7 @@ class BedrockChatModelProvider {
     }
     return anthropicBeta;
   }
-  async buildManualModelInformation(modelId, settings, token) {
+  async buildManualModelInformation(modelId, token) {
     const abortController = new AbortController;
     const cancellationListener = token.onCancellationRequested(() => abortController.abort());
     try {
@@ -53816,7 +56303,7 @@ class BedrockChatModelProvider {
           modelId
         });
       }
-      const limits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
+      const limits = getModelTokenLimits(baseModelId, this.resolveContext1MEnabled(modelId));
       const likelyVisionCapable = /anthropic\.|nova\.|llama\.|pixtral|gpt-oss/i.test(baseModelId);
       return {
         capabilities: {
@@ -54337,6 +56824,26 @@ class BedrockChatModelProvider {
       } : undefined
     });
   }
+  async migrateStaleContextSelections() {
+    if (this.globalState.get(BedrockChatModelProvider.CONTEXT_SELECTION_MIGRATION_KEY)) {
+      return;
+    }
+    const map = {
+      ...this.globalState.get(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, {})
+    };
+    const removed = [];
+    for (const [modelId, value] of Object.entries(map)) {
+      if (value >= 1e6) {
+        delete map[modelId];
+        removed.push(modelId);
+      }
+    }
+    if (removed.length > 0) {
+      logger.info("[Bedrock Model Provider] Migrating stale 1M context selections to 200K default", { clearedModels: removed });
+      await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, map);
+    }
+    await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_MIGRATION_KEY, true);
+  }
   async processResponseStream(requestInput, trackingProgress, extendedThinkingEnabled, token) {
     const abortController = new AbortController;
     const cancellationListener = token.onCancellationRequested(() => {
@@ -54398,21 +56905,19 @@ class BedrockChatModelProvider {
       cancellationListener.dispose();
     }
   }
-  async reconcilePersistedContextSelections(advertisedModelIds, settings) {
+  async reconcilePersistedContextSelections(advertisedModelIds) {
     const map = {
       ...this.globalState.get(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, {})
     };
     const advertised = new Set(advertisedModelIds);
     let changed = false;
     for (const [modelId, stored] of Object.entries(map)) {
-      const drop = this.shouldDropContextSelection(modelId, stored, advertised, settings);
+      const drop = this.shouldDropContextSelection(modelId, stored, advertised);
       if (drop) {
         logger.debug("[Bedrock Model Provider] Reconciling stale context selection (dropping)", {
           modelId,
           reason: drop,
-          storedValue: stored,
-          workspaceContext1MEnabled: settings.context1M.enabled,
-          workspaceExplicitlySet: settings.context1M.explicitlySet
+          storedValue: stored
         });
         delete map[modelId];
         changed = true;
@@ -54423,9 +56928,37 @@ class BedrockChatModelProvider {
     }
     return changed;
   }
-  resolveContext1MEnabled(modelId, fallback) {
+  resolveContext1MEnabled(modelId) {
     const selection = this.getPersistedContextSelection(modelId);
-    return selection === undefined ? fallback : selection >= 1e6;
+    return selection === undefined ? false : selection >= 1e6;
+  }
+  resolveRequestContext1M(modelId, modelConfiguration) {
+    const contextLength = modelConfiguration?.contextLength;
+    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
+      logger.debug("[Bedrock Model Provider] Context-size picker override received", {
+        contextLength,
+        enables1M: contextLength >= 1e6,
+        modelId
+      });
+      this.setPersistedContextSelection(modelId, contextLength).then((changed) => {
+        if (changed) {
+          this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
+        }
+      }, (error) => {
+        logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
+          error: error instanceof Error ? error.message : String(error),
+          modelId
+        });
+      });
+      return contextLength >= 1e6;
+    }
+    if (contextLength !== undefined) {
+      logger.debug("[Bedrock Model Provider] Ignoring non-numeric contextLength override", {
+        contextLength,
+        modelId
+      });
+    }
+    return this.resolveContext1MEnabled(modelId);
   }
   async setPersistedContextSelection(modelId, totalTokens) {
     const map = {
@@ -54438,7 +56971,7 @@ class BedrockChatModelProvider {
     await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, map);
     return true;
   }
-  shouldDropContextSelection(modelId, stored, advertised, settings) {
+  shouldDropContextSelection(modelId, stored, advertised) {
     if (!advertised.has(modelId)) {
       return "orphaned (model not advertised)";
     }
@@ -54452,9 +56985,6 @@ class BedrockChatModelProvider {
     }
     if (stored !== nonManagedTotal && stored !== managedTotal) {
       return "value not a valid option for model";
-    }
-    if (stored === nonManagedTotal && settings.context1M.enabled && !settings.context1M.explicitlySet) {
-      return "stale non-1M selection overriding default-on 1M window";
     }
     return;
   }
@@ -54520,7 +57050,7 @@ function activate(context) {
     await manageSettings(context.secrets, context.globalState);
   });
   const cfgDisposable = vscode8.workspace.onDidChangeConfiguration((e) => {
-    if (e.affectsConfiguration("bedrock.region") || e.affectsConfiguration("bedrock.profile") || e.affectsConfiguration("bedrock.preferredModel") || e.affectsConfiguration("bedrock.inferenceProfiles.preferRegional") || e.affectsConfiguration("bedrock.context1M.enabled") || e.affectsConfiguration("bedrock.promptCaching.enabled") || e.affectsConfiguration("bedrock.thinking.enabled") || e.affectsConfiguration("bedrock.thinking.budgetTokens") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.enabled") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.maxTokens")) {
+    if (e.affectsConfiguration("bedrock.region") || e.affectsConfiguration("bedrock.profile") || e.affectsConfiguration("bedrock.preferredModel") || e.affectsConfiguration("bedrock.inferenceProfiles.preferRegional") || e.affectsConfiguration("bedrock.promptCaching.enabled") || e.affectsConfiguration("bedrock.thinking.enabled") || e.affectsConfiguration("bedrock.thinking.budgetTokens") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.enabled") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.maxTokens")) {
       provider.notifyModelInformationChanged("configuration changed");
     }
   });
@@ -54570,5 +57100,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=D4606910E5D6CA0A64756E2164756E21
+//# debugId=BB8103FED026894564756E2164756E21
 //# sourceMappingURL=extension.js.map

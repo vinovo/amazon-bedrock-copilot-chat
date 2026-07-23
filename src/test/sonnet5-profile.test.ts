@@ -60,13 +60,15 @@ suite("Claude Sonnet 5", () => {
 
   suite("getModelTokenLimits", () => {
     for (const id of ids) {
-      test(`uses 200K/128K by default for ${id}`, () => {
+      // Copilot-aligned reservation: min(128K native output, 15% of context window).
+      // At 200K → 15% = 30K reserve; at 1M → 15% = 150K exceeds the 128K native cap → 128K.
+      test(`reserves 30K output (15% of 200K) by default for ${id}`, () => {
         const limits = getModelTokenLimits(id);
-        assert.equal(limits.maxOutputTokens, 128_000, "maxOutputTokens");
-        assert.equal(limits.maxInputTokens, 200_000 - 128_000, "maxInputTokens (200K window)");
+        assert.equal(limits.maxOutputTokens, 30_000, "maxOutputTokens");
+        assert.equal(limits.maxInputTokens, 200_000 - 30_000, "maxInputTokens (200K window)");
       });
 
-      test(`uses 1M/128K when 1M context is enabled for ${id}`, () => {
+      test(`reserves 128K output (native cap) when 1M context is enabled for ${id}`, () => {
         const limits = getModelTokenLimits(id, true);
         assert.equal(limits.maxOutputTokens, 128_000, "maxOutputTokens");
         assert.equal(limits.maxInputTokens, 1_000_000 - 128_000, "maxInputTokens (1M window)");

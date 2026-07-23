@@ -5,6 +5,33 @@ All notable changes to the "amazon-bedrock-copilot-chat" extension will be docum
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-07-22
+
+### Fixed
+
+- **Context-window badge still stuck at 1M after 0.16.0**: existing installs had `1_000_000`
+  values persisted per model (seeded by the old default-on `bedrock.context1M.enabled`). Because
+  VS Code only re-sends the picker value when it _changes_, the new 200K default never overwrote
+  them and the badge stayed at 1M. Added a one-time migration that clears those stale 1M seeds so
+  models fall back to the 200K default; re-select 1M in the Context Size picker to opt back in.
+
+## [0.16.0] - 2026-07-22
+
+### Changed
+
+- **Context window is now controlled solely by the per-model "Context Size" picker.** The window
+  defaults to 200K and 1M is opt-in per model; your choice is remembered per model.
+
+### Fixed
+
+- **Context-window badge stuck at 1M**: a deliberate 200K selection was deleted on the next
+  model-list rebuild, so the tracker never reflected the picker. The picker choice is now honored.
+
+### Removed
+
+- **`bedrock.context1M.enabled` setting**: superseded by the per-model Context Size picker. Any
+  existing value is ignored; use the picker in the chat model dropdown instead.
+
 ## [0.8.0] - 2026-02-23
 
 ### Added

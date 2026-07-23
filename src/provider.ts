@@ -75,6 +75,21 @@ export const BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
 
 export class BedrockChatModelProvider implements vscode.Disposable, LanguageModelChatProvider {
   /**
+   * `globalState` flag marking that the one-time cleanup of stale 1M context
+   * selections has run. Before the "Context Size" picker became the single
+   * source of truth (defaulting to 200K), the removed `bedrock.context1M.enabled`
+   * setting defaulted to ON, which seeded {@link CONTEXT_SELECTION_STATE_KEY}
+   * with `1_000_000` entries for every model. Those stale entries would keep the
+   * advertised window — and thus the badge — pinned at 1M forever, because VS
+   * Code only sends `contextLength` when the picker value *changes*, so the new
+   * 200K default never gets a chance to overwrite them. This migration clears
+   * that seeded map exactly once so users start from the intended 200K default;
+   * opting back into 1M via the picker persists a fresh, deliberate selection.
+   */
+  private static readonly CONTEXT_SELECTION_MIGRATION_KEY =
+    "bedrock.contextSelection.clearedStale1M";
+
+  /**
    * `globalState` key holding the per-model "Context Size" picker selections.
    *
    * The context-window-tracker badge ("X / Y tokens") denominator is read by VS
@@ -89,6 +104,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
    * context-window token count (e.g. `200_000` or `1_000_000`).
    */
   private static readonly CONTEXT_SELECTION_STATE_KEY = "bedrock.contextSelection.byModel";
+
   /**
    * Length of the echo-suppression window. Must comfortably exceed the time
    * between our `.fire()` and VS Code bouncing `onDidChangeChatModels` back
@@ -195,6 +211,11 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     token: CancellationToken,
   ): Promise<LanguageModelChatInformation[]> {
     const settings = await getBedrockSettings(this.globalState);
+
+    // One-time cleanup of stale 1M context selections seeded by the removed
+    // `bedrock.context1M.enabled` (default-on) setting. Must run before the model
+    // list is built so the advertised window reflects the intended 200K default.
+    await this.migrateStaleContextSelections();
 
     // Check if this is the first run by checking if we've shown the welcome prompt before
     const hasRunBefore = this.globalState.get<boolean>("bedrock.hasRunBefore", false);
@@ -316,13 +337,10 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
               continue;
             }
 
-            // Prefer the user's persisted per-model "Context Size" picker choice over the
-            // workspace fallback so the advertised window (and thus the badge denominator)
-            // reflects what the user actually selected for this model.
-            const context1MEnabled = this.resolveContext1MEnabled(
-              modelIdToUse,
-              settings.context1M.enabled,
-            );
+            // Honor the user's persisted per-model "Context Size" picker choice so the advertised
+            // window (and thus the badge denominator) reflects what the user selected. Defaults to
+            // 200K until the user opts into 1M via the picker.
+            const context1MEnabled = this.resolveContext1MEnabled(modelIdToUse);
             const limits = getModelTokenLimits(modelIdToUse, context1MEnabled);
             const maxInput = limits.maxInputTokens;
             const maxOutput = limits.maxOutputTokens;
@@ -377,13 +395,10 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
 
             // Use base model ID for token limits (falls back to profile ID if not available)
             const modelIdForLimits = profile.baseModelId ?? profile.modelId;
-            // Persisted per-model picker choice wins over the workspace fallback (see above).
-            // Key the selection off the application-profile ARN that VS Code uses as the model
-            // id, so the persisted choice matches what `applyModelConfigurationOverrides` stores.
-            const context1MEnabled = this.resolveContext1MEnabled(
-              profile.modelArn,
-              settings.context1M.enabled,
-            );
+            // Persisted per-model picker choice drives the advertised window (see above). Key the
+            // selection off the application-profile ARN that VS Code uses as the model id, so the
+            // persisted choice matches what `applyModelConfigurationOverrides` stores.
+            const context1MEnabled = this.resolveContext1MEnabled(profile.modelArn);
             const limits = getModelTokenLimits(modelIdForLimits, context1MEnabled);
             const maxInput = limits.maxInputTokens;
             const maxOutput = limits.maxOutputTokens;
@@ -448,14 +463,13 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
             throw new NoAccessibleModelsError();
           }
 
-          // Self-heal stale per-model "Context Size" selections against the models we just built
-          // and the effective workspace default. If anything changed, the advertised limits below
-          // may have been computed from a now-cleared selection, so signal a refresh: VS Code will
-          // re-query and receive the corrected window (and badge denominator). The echo-suppression
-          // window armed by `notifyModelInformationChanged` prevents this from looping.
+          // Self-heal stale per-model "Context Size" selections against the models we just built.
+          // If anything changed, the advertised limits below may have been computed from a
+          // now-cleared selection, so signal a refresh: VS Code will re-query and receive the
+          // corrected window (and badge denominator). The echo-suppression window armed by
+          // `notifyModelInformationChanged` prevents this from looping.
           const reconciled = await this.reconcilePersistedContextSelections(
             infos.map((info) => info.id),
-            settings,
           );
           if (reconciled) {
             logger.info(
@@ -483,7 +497,6 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           // shift in these numbers between rebuilds will visibly move the
           // badge on the next request.
           logger.debug("[Bedrock Model Provider] Models rebuilt with effective token limits:", {
-            context1MEnabled: settings.context1M.enabled,
             models: infos.map((info) => ({
               id: info.id,
               maxInputTokens: info.maxInputTokens,
@@ -528,11 +541,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           });
 
           if (manualModelId) {
-            const manualInfo = await this.buildManualModelInformation(
-              manualModelId,
-              settings,
-              token,
-            );
+            const manualInfo = await this.buildManualModelInformation(manualModelId, token);
 
             if (manualInfo) {
               this.chatEndpoints = [
@@ -557,11 +566,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
           });
 
           if (manualModelId) {
-            const manualInfo = await this.buildManualModelInformation(
-              manualModelId,
-              settings,
-              token,
-            );
+            const manualInfo = await this.buildManualModelInformation(manualModelId, token);
 
             if (manualInfo) {
               this.chatEndpoints = [
@@ -680,23 +685,26 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
 
       // Diagnostic: log exactly what the model picker delivered on this request so we can tell
       // whether the "Context Size" (and other picker) selections are actually reaching the
-      // provider. When `contextLength` is absent here, the persisted per-model selection (or the
-      // workspace fallback) is what drives the advertised window / badge denominator.
+      // provider. When `contextLength` is absent here, the persisted per-model selection (else the
+      // 200K default) is what drives the advertised window / badge denominator.
       logger.debug("[Bedrock Model Provider] Incoming modelConfiguration:", {
         modelConfiguration: options.modelConfiguration ?? "(none)",
         modelId: model.id,
         persistedContextSelection: this.getPersistedContextSelection(model.id) ?? "(none)",
-        workspaceContext1MEnabled: settings.context1M.enabled,
       });
 
       // Per-model picker configuration (proposed `chatProvider` API) takes precedence over the
-      // workspace `bedrock.thinking.*` / `bedrock.context1M.*` fallback settings. Whatever the
-      // user selects in the model picker arrives on `options.modelConfiguration`, keyed to our
-      // `configurationSchema`. Apply it before computing token limits so the context-length
-      // picker choice (200K vs 1M) is reflected in this request's limits and beta headers.
-      this.applyModelConfigurationOverrides(model.id, settings, options.modelConfiguration);
+      // workspace `bedrock.thinking.*` fallback settings. Whatever the user selects in the model
+      // picker arrives on `options.modelConfiguration`, keyed to our `configurationSchema`. Apply
+      // it before computing token limits so the context-length picker choice (200K vs 1M) is
+      // reflected in this request's limits and beta headers.
+      const context1MEnabled = this.applyModelConfigurationOverrides(
+        model.id,
+        settings,
+        options.modelConfiguration,
+      );
 
-      const modelLimits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
+      const modelLimits = getModelTokenLimits(baseModelId, context1MEnabled);
 
       // Calculate thinking configuration
       // Use model's maxOutputTokens as default when VSCode doesn't provide max_tokens.
@@ -779,7 +787,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       const betaHeaders = this.buildBetaHeaders(
         modelProfile,
         extendedThinkingEnabled,
-        settings.context1M.enabled,
+        context1MEnabled,
         thinkingEffortEnabled,
       );
 
@@ -1017,126 +1025,51 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   }
 
   /**
-   * Resolve the effective 1M-context state for this request and write it onto
-   * `settings.context1M.enabled`, applying strict precedence:
-   *   1. per-request picker value (`modelConfiguration.contextLength`), when present;
-   *   2. persisted per-model picker choice (`bedrock.contextSelection.byModel`), when present;
-   *   3. workspace `bedrock.context1M.enabled` fallback (already in `settings`).
-   *
-   * The workspace setting is ONLY a fallback and never overrides an explicit picker selection.
-   */
-  private applyContextLengthOverride(
-    modelId: string,
-    settings: Awaited<ReturnType<typeof getBedrockSettings>>,
-    modelConfiguration: Readonly<Record<string, unknown>> | undefined,
-  ): void {
-    const contextLength = modelConfiguration?.contextLength;
-
-    // (1) Per-request picker value wins outright and is persisted for subsequent turns.
-    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
-      logger.debug("[Bedrock Model Provider] Context-size picker override received", {
-        contextLength,
-        enables1M: contextLength >= 1_000_000,
-        modelId,
-      });
-      settings.context1M.enabled = contextLength >= 1_000_000;
-      // Persist the per-model choice and, if it changed, refresh the advertised model list so the
-      // badge denominator follows the picker. Fire-and-forget: the in-flight request must not block
-      // on `globalState.update`, and the refresh only needs to land before the next badge render.
-      void this.setPersistedContextSelection(modelId, contextLength).then(
-        (changed) => {
-          if (changed) {
-            this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
-          }
-        },
-        (error: unknown) => {
-          logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
-            error: error instanceof Error ? error.message : String(error),
-            modelId,
-          });
-        },
-      );
-      return;
-    }
-
-    if (contextLength !== undefined) {
-      // The picker sent a `contextLength` we could not interpret. Surface it rather than
-      // silently ignoring it, so a future protocol change is easy to spot in the logs.
-      logger.debug("[Bedrock Model Provider] Ignoring non-numeric contextLength override", {
-        contextLength,
-        modelId,
-      });
-    }
-
-    // (2) No usable per-request value: honor the persisted per-model picker choice if one exists,
-    // so the workspace setting cannot silently override a prior selection on turns where VS Code
-    // omits `contextLength`. (3) Otherwise leave the workspace fallback (already in `settings`).
-    const persisted = this.getPersistedContextSelection(modelId);
-    if (persisted !== undefined) {
-      const enabledFromPicker = persisted >= 1_000_000;
-      if (enabledFromPicker !== settings.context1M.enabled) {
-        logger.debug(
-          "[Bedrock Model Provider] Applying persisted context selection over workspace fallback",
-          {
-            enables1M: enabledFromPicker,
-            modelId,
-            persistedSelection: persisted,
-            workspaceContext1MEnabled: settings.context1M.enabled,
-          },
-        );
-      }
-      settings.context1M.enabled = enabledFromPicker;
-    }
-  }
-
-  /**
    * Apply per-model picker configuration (proposed `chatProvider` API) on top of the workspace
-   * `bedrock.thinking.*` and `bedrock.context1M.*` fallback settings. Values present in
-   * `modelConfiguration` win; absent values leave the fallback intact. Unknown/invalid values
-   * are ignored.
+   * `bedrock.thinking.*` fallback settings. Values present in `modelConfiguration` win; absent
+   * values leave the fallback intact. Unknown/invalid values are ignored.
    *
-   * The "Context Size" selection is additionally persisted per model (keyed by `modelId`, the
-   * VS Code-advertised id) and, when it changes, triggers a model-list refresh. This is what
-   * moves the context-window-tracker badge denominator: the badge reads the advertised
-   * `maxInputTokens + maxOutputTokens`, which we recompute from the persisted selection on the
-   * next `prepareLanguageModelChatInformation` rebuild. There is therefore a one-turn lag — the
-   * picked window applies immediately to the in-flight request, and the badge catches up on the
-   * subsequent refresh.
+   * Returns the effective 1M-context state for this request. The "Context Size" selection is
+   * additionally persisted per model (keyed by `modelId`, the VS Code-advertised id) and, when it
+   * changes, triggers a model-list refresh. This is what moves the context-window-tracker badge
+   * denominator: the badge reads the advertised `maxInputTokens + maxOutputTokens`, which we
+   * recompute from the persisted selection on the next `prepareLanguageModelChatInformation`
+   * rebuild. There is therefore a one-turn lag — the picked window applies immediately to the
+   * in-flight request, and the badge catches up on the subsequent refresh.
    */
   private applyModelConfigurationOverrides(
     modelId: string,
     settings: Awaited<ReturnType<typeof getBedrockSettings>>,
     modelConfiguration: Readonly<Record<string, unknown>> | undefined,
-  ): void {
+  ): boolean {
     // Resolve the effective 1M-context state first, independently of the other picker controls.
     // This MUST run even when `modelConfiguration` is undefined so the persisted per-model picker
-    // choice still wins over the workspace fallback (VS Code does not resend `contextLength` every
-    // turn). The workspace `bedrock.context1M.enabled` setting is only the lowest-priority fallback.
-    this.applyContextLengthOverride(modelId, settings, modelConfiguration);
+    // choice still applies (VS Code does not resend `contextLength` every turn).
+    const context1MEnabled = this.resolveRequestContext1M(modelId, modelConfiguration);
 
-    if (!modelConfiguration) {
-      return;
+    if (modelConfiguration) {
+      if (typeof modelConfiguration.thinkingEnabled === "boolean") {
+        settings.thinking.enabled = modelConfiguration.thinkingEnabled;
+      }
+
+      const effort = modelConfiguration.thinkingEffort;
+      if (
+        effort === "high" ||
+        effort === "medium" ||
+        effort === "low" ||
+        effort === "max" ||
+        effort === "xhigh"
+      ) {
+        settings.thinking.effort = effort;
+      }
+
+      const display = modelConfiguration.thinkingDisplay;
+      if (display === "summarized" || display === "omitted") {
+        settings.thinking.display = display;
+      }
     }
 
-    if (typeof modelConfiguration.thinkingEnabled === "boolean") {
-      settings.thinking.enabled = modelConfiguration.thinkingEnabled;
-    }
-
-    const effort = modelConfiguration.thinkingEffort;
-    if (
-      effort === "high" ||
-      effort === "medium" ||
-      effort === "low" ||
-      effort === "max" ||
-      effort === "xhigh"
-    ) {
-      settings.thinking.effort = effort;
-    }
-
-    const display = modelConfiguration.thinkingDisplay;
-    if (display === "summarized" || display === "omitted") {
-      settings.thinking.display = display;
-    }
+    return context1MEnabled;
   }
 
   /**
@@ -1214,7 +1147,6 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
    */
   private async buildManualModelInformation(
     modelId: string,
-    settings: Awaited<ReturnType<typeof getBedrockSettings>>,
     token: CancellationToken,
   ): Promise<LanguageModelChatInformation | undefined> {
     const abortController = new AbortController();
@@ -1234,7 +1166,7 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
         });
       }
 
-      const limits = getModelTokenLimits(baseModelId, settings.context1M.enabled);
+      const limits = getModelTokenLimits(baseModelId, this.resolveContext1MEnabled(modelId));
       const likelyVisionCapable = /anthropic\.|nova\.|llama\.|pixtral|gpt-oss/i.test(baseModelId);
 
       return {
@@ -1447,8 +1379,8 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     // as the dedicated "Context Size" control (`group: "tokens"`). The enum values MUST be numeric
     // total-context-window token counts — VS Code renders them via `formatTokenCount(Number(value))`
     // and `enumItemLabels` overrides the displayed text. The `default` mirrors the effective
-    // per-model context state (persisted picker choice, else the `bedrock.context1M.enabled`
-    // fallback) so the control and the advertised badge denominator stay in sync.
+    // per-model context state (persisted picker choice, else the 200K default) so the control and
+    // the advertised badge denominator stay in sync.
     const contextLength: SchemaProperty | undefined = supportsToggleable1MContext
       ? {
           default: context1MEnabled ? 1_000_000 : 200_000,
@@ -2133,6 +2065,50 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   }
 
   /**
+   * One-time cleanup of stale 1M context-window selections that were implicitly
+   * seeded by the (now-removed) `bedrock.context1M.enabled` setting when it
+   * defaulted to ON. Those entries pin the advertised window at 1M because VS
+   * Code only re-sends `contextLength` when the picker value *changes*, so the
+   * new 200K default can never overwrite a pre-seeded 1M value on its own.
+   *
+   * We remove any `1_000_000` entries from {@link CONTEXT_SELECTION_STATE_KEY}
+   * exactly once (gated by {@link CONTEXT_SELECTION_MIGRATION_KEY}), leaving the
+   * models to fall back to the intended 200K default. Deliberate future 1M picks
+   * are re-persisted by the picker and are unaffected on subsequent runs. Any
+   * non-1M selections are preserved.
+   */
+  private async migrateStaleContextSelections(): Promise<void> {
+    if (this.globalState.get<boolean>(BedrockChatModelProvider.CONTEXT_SELECTION_MIGRATION_KEY)) {
+      return;
+    }
+
+    const map = {
+      ...this.globalState.get<Record<string, number>>(
+        BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY,
+        {},
+      ),
+    };
+
+    const removed: string[] = [];
+    for (const [modelId, value] of Object.entries(map)) {
+      if (value >= 1_000_000) {
+        delete map[modelId];
+        removed.push(modelId);
+      }
+    }
+
+    if (removed.length > 0) {
+      logger.info(
+        "[Bedrock Model Provider] Migrating stale 1M context selections to 200K default",
+        { clearedModels: removed },
+      );
+      await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_STATE_KEY, map);
+    }
+
+    await this.globalState.update(BedrockChatModelProvider.CONTEXT_SELECTION_MIGRATION_KEY, true);
+  }
+
+  /**
    * Process the response stream and handle thinking blocks
    */
   private async processResponseStream(
@@ -2275,27 +2251,25 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
 
   /**
    * Reconcile the persisted per-model "Context Size" selections against the current set of
-   * advertised models and the effective workspace default, dropping entries that would otherwise
-   * silently produce a wrong context-window badge. Runs on every model-list build so a stale value
-   * self-heals without any manual `globalState` surgery.
+   * advertised models, dropping entries that would otherwise silently produce a wrong
+   * context-window badge. Runs on every model-list build so a stale value self-heals without any
+   * manual `globalState` surgery.
    *
    * An entry is dropped when:
    *  1. The model is no longer advertised (orphaned key), OR
    *  2. The model's 1M context window is not toggleable (single fixed window — the picker never
    *     applies), OR
    *  3. The stored value is not a legitimate option for the model (neither the model's non-1M
-   *     total window nor its 1M total window), OR
-   *  4. The stored value pins the *non-1M* window while the workspace `bedrock.context1M.enabled`
-   *     default is on AND the user has not explicitly configured that setting. This is the exact
-   *     "stuck at 200K" case: a stale selection was silently overriding the intended 1M default.
-   *     Clearing it lets the default apply again.
+   *     total window nor its 1M total window).
+   *
+   * A stored value that IS a valid window option for a toggleable, advertised model is always
+   * honored — it represents a deliberate per-model picker choice.
    *
    * @returns `true` when at least one entry was removed (caller should treat the advertised limits
    *   it just computed as authoritative; the next build will reflect the healed state).
    */
   private async reconcilePersistedContextSelections(
     advertisedModelIds: readonly string[],
-    settings: Awaited<ReturnType<typeof getBedrockSettings>>,
   ): Promise<boolean> {
     const map = {
       ...this.globalState.get<Record<string, number>>(
@@ -2307,14 +2281,12 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     let changed = false;
 
     for (const [modelId, stored] of Object.entries(map)) {
-      const drop = this.shouldDropContextSelection(modelId, stored, advertised, settings);
+      const drop = this.shouldDropContextSelection(modelId, stored, advertised);
       if (drop) {
         logger.debug("[Bedrock Model Provider] Reconciling stale context selection (dropping)", {
           modelId,
           reason: drop,
           storedValue: stored,
-          workspaceContext1MEnabled: settings.context1M.enabled,
-          workspaceExplicitlySet: settings.context1M.explicitlySet,
         });
         delete map[modelId];
         changed = true;
@@ -2328,14 +2300,71 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
   }
 
   /**
-   * Resolve whether the 1M context window should be advertised for `modelId`,
-   * preferring the persisted per-model picker selection and falling back to the
-   * workspace `bedrock.context1M.enabled` setting when the user has not made an
-   * explicit per-model choice.
+   * Resolve whether the 1M context window should be advertised/used for `modelId`.
+   *
+   * The per-model "Context Size" picker is the single source of truth: the persisted selection
+   * (`bedrock.contextSelection.byModel`) decides the window. When the user has not made a choice
+   * yet, we default to the standard 200K window — 1M is opt-in per model via the picker, since it
+   * increases cost and latency.
    */
-  private resolveContext1MEnabled(modelId: string, fallback: boolean): boolean {
+  private resolveContext1MEnabled(modelId: string): boolean {
     const selection = this.getPersistedContextSelection(modelId);
-    return selection === undefined ? fallback : selection >= 1_000_000;
+    return selection === undefined ? false : selection >= 1_000_000;
+  }
+
+  /**
+   * Resolve the effective 1M-context state for this request, applying strict precedence:
+   *   1. per-request picker value (`modelConfiguration.contextLength`), when present;
+   *   2. persisted per-model picker choice (`bedrock.contextSelection.byModel`), when present;
+   *   3. default 200K (1M is opt-in per model via the picker).
+   *
+   * When the picker sends a value it is persisted for subsequent turns and, if changed, a
+   * model-list refresh is fired so the context-window badge follows the picker.
+   */
+  private resolveRequestContext1M(
+    modelId: string,
+    modelConfiguration: Readonly<Record<string, unknown>> | undefined,
+  ): boolean {
+    const contextLength = modelConfiguration?.contextLength;
+
+    // (1) Per-request picker value wins outright and is persisted for subsequent turns.
+    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
+      logger.debug("[Bedrock Model Provider] Context-size picker override received", {
+        contextLength,
+        enables1M: contextLength >= 1_000_000,
+        modelId,
+      });
+      // Persist the per-model choice and, if it changed, refresh the advertised model list so the
+      // badge denominator follows the picker. Fire-and-forget: the in-flight request must not block
+      // on `globalState.update`, and the refresh only needs to land before the next badge render.
+      void this.setPersistedContextSelection(modelId, contextLength).then(
+        (changed) => {
+          if (changed) {
+            this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
+          }
+        },
+        (error: unknown) => {
+          logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
+            error: error instanceof Error ? error.message : String(error),
+            modelId,
+          });
+        },
+      );
+      return contextLength >= 1_000_000;
+    }
+
+    if (contextLength !== undefined) {
+      // The picker sent a `contextLength` we could not interpret. Surface it rather than
+      // silently ignoring it, so a future protocol change is easy to spot in the logs.
+      logger.debug("[Bedrock Model Provider] Ignoring non-numeric contextLength override", {
+        contextLength,
+        modelId,
+      });
+    }
+
+    // (2) No usable per-request value: honor the persisted per-model picker choice if one exists
+    // (VS Code does not resend `contextLength` every turn). (3) Otherwise default to 200K.
+    return this.resolveContext1MEnabled(modelId);
   }
 
   /**
@@ -2370,7 +2399,6 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
     modelId: string,
     stored: number,
     advertised: ReadonlySet<string>,
-    settings: Awaited<ReturnType<typeof getBedrockSettings>>,
   ): string | undefined {
     if (!advertised.has(modelId)) {
       return "orphaned (model not advertised)";
@@ -2398,16 +2426,8 @@ export class BedrockChatModelProvider implements vscode.Disposable, LanguageMode
       return "value not a valid option for model";
     }
 
-    // "Stuck at 200K": a stored non-1M selection silently overriding the on-by-default 1M window
-    // that the user never explicitly turned off. Drop it so the default applies again.
-    if (
-      stored === nonManagedTotal &&
-      settings.context1M.enabled &&
-      !settings.context1M.explicitlySet
-    ) {
-      return "stale non-1M selection overriding default-on 1M window";
-    }
-
+    // The stored value is a valid window option for a currently-advertised, toggleable model,
+    // so it represents a deliberate per-model picker choice. Honor it unconditionally.
     return undefined;
   }
 
