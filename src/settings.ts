@@ -43,9 +43,9 @@ export type ThinkingDisplay = "omitted" | "summarized";
  * Not all models support all levels — see {@link ModelProfile.supportedThinkingEfforts}.
  *
  * - "max":   Absolute maximum capability with no constraints on token spending.
- *            Available on Opus 4.6/4.7/4.8, Sonnet 4.6, Sonnet 5.
+ *            Available on Opus 5, Opus 4.6/4.7/4.8, Sonnet 4.6, Sonnet 5.
  * - "xhigh": Extended capability for long-horizon agentic and coding work.
- *            Available on Opus 4.7/4.8, Sonnet 5 (NOT Opus 4.6 or Sonnet 4.6).
+ *            Available on Opus 5, Opus 4.7/4.8, Sonnet 5 (NOT Opus 4.6 or Sonnet 4.6).
  * - "high":  High capability. Equivalent to omitting the parameter (server default).
  * - "medium": Balanced approach with moderate token savings.
  * - "low":   Most efficient — significant token savings with some capability reduction.

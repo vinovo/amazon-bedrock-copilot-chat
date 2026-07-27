@@ -5,6 +5,16 @@ All notable changes to the "amazon-bedrock-copilot-chat" extension will be docum
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] - 2026-07-27
+
+### Added
+
+- **Claude Opus 5 support**: Added `anthropic.claude-opus-5` (launched July 24, 2026) to model
+  profiles and fallback detection. Opus 5 uses adaptive-thinking-only (no manual `budget_tokens`),
+  supports the full effort set (`max`, `xhigh`, `high`, `medium`, `low`), and defaults to a 200K
+  context window with opt-in 1M (same pattern as Opus 4.8). Geo inference profiles: `us/eu/au`;
+  global inference profile: `global.anthropic.claude-opus-5`.
+
 ## [0.16.1] - 2026-07-22
 
 ### Fixed

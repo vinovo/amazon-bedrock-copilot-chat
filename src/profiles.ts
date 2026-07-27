@@ -23,9 +23,9 @@ export interface ModelProfile {
    * An empty array means the model does not support the effort parameter at all.
    * The ordering matches the picker display (highest first: max → xhigh → high → medium → low).
    * Not all models support all levels:
-   *   - Opus 4.8 / Opus 4.7 / Sonnet 5: max, xhigh, high, medium, low
-   *   - Opus 4.6 / Sonnet 4.6:           max, high, medium, low  (no xhigh)
-   *   - Opus 4.5 / Sonnet 4.5 / Haiku 4.5: high, medium, low
+   * - Opus 5 / Opus 4.8 / Opus 4.7 / Sonnet 5: max, xhigh, high, medium, low
+   *   - Opus 4.6 / Sonnet 4.6:                  max, high, medium, low  (no xhigh)
+   *   - Opus 4.5 / Sonnet 4.5 / Haiku 4.5:      high, medium, low
    */
   supportedThinkingEfforts: readonly ThinkingEffort[];
   /**
@@ -34,9 +34,10 @@ export interface ModelProfile {
   supports1MContext: boolean;
   /**
    * Whether the model uses adaptive thinking only (thinking.type: "adaptive"), without budget_tokens.
-   * Claude Opus 4.8, Opus 4.7, and Sonnet 5 use this mode exclusively; manual thinking returns 400.
+   * Claude Opus 5, Opus 4.8, Opus 4.7, and Sonnet 5 use this mode exclusively; manual thinking returns 400.
    * Temperature/top_p/top_k are also unsupported when extended thinking is active.
    * See:
+   *   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
    *   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
    *   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
    */
@@ -220,13 +221,29 @@ export function getModelTokenLimits(modelId: string, enable1MContext = false): M
 }
 
 /**
+ * Reserve output tokens the way GitHub Copilot does: cap the response reservation at
+ * `min(model's native max output, 15% of the context window)`, then give the remainder to the
+ * prompt. This mirrors Copilot's model-metadata hydration (vscode-copilot-chat
+ * `modelMetadataFetcher._hydrateResolvedModel`), preventing a large native output ceiling
+ * (e.g. 128K for Opus 4.8) from eating most of a 200K context window.
+ *
+ * @example copilotAlignedLimits(200_000, 128_000)   → { maxInputTokens: 170_000, maxOutputTokens: 30_000 }
+ * @example copilotAlignedLimits(1_000_000, 128_000) → { maxInputTokens: 872_000, maxOutputTokens: 128_000 }
+ */
+function copilotAlignedLimits(contextWindow: number, nativeMaxOutput: number): ModelTokenLimits {
+  const reserve = Math.floor(Math.min(nativeMaxOutput, contextWindow * 0.15));
+  return { maxInputTokens: contextWindow - reserve, maxOutputTokens: reserve };
+}
+
+/**
  * Build the model profile for Anthropic Claude models.
  * Extracted from {@link getModelProfile} to keep that function's cognitive complexity low.
  */
 function getAnthropicProfile(modelId: string): ModelProfile {
   // Claude models support tool choice and prompt caching
-  // Extended thinking is supported by Claude Opus 4+, Sonnet 5, Sonnet 4+, Haiku 4.5+, and Sonnet 3.7
+  // Extended thinking is supported by Claude Opus 5, Opus 4+, Sonnet 5, Sonnet 4+, Haiku 4.5+, and Sonnet 3.7
   const supportsThinking =
+    modelId.includes("opus-5") ||
     modelId.includes("opus-4") ||
     modelId.includes("sonnet-5") ||
     modelId.includes("sonnet-4") ||
@@ -247,14 +264,18 @@ function getAnthropicProfile(modelId: string): ModelProfile {
   // When extended thinking is enabled, cachePoint should only be added to messages without toolResult
   const supportsCachingWithToolResults = !supportsThinking;
 
-  // Opus 4.8, Opus 4.7, and Sonnet 5 use adaptive thinking only (thinking.type: "adaptive").
+  // Opus 5, Opus 4.8, Opus 4.7, and Sonnet 5 use adaptive thinking only (thinking.type: "adaptive").
   // budget_tokens and temperature/top_p/top_k are not supported and will return a 400 error.
   // See:
+  //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
   //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
   //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
   //   https://platform.claude.com/docs/en/docs/about-claude/models/overview (Claude Sonnet 5)
   const supportsAdaptiveThinkingOnly =
-    modelId.includes("opus-4-8") || modelId.includes("opus-4-7") || modelId.includes("sonnet-5");
+    modelId.includes("opus-5") ||
+    modelId.includes("opus-4-8") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("sonnet-5");
 
   // Claude Opus 4.6 and Sonnet 4.6 recommend adaptive thinking. Manual budget-based thinking
   // is deprecated-but-still-functional for them, so we treat adaptive as a *preference* rather
@@ -269,9 +290,9 @@ function getAnthropicProfile(modelId: string): ModelProfile {
 
   // Adaptive thinking / thinking effort parameter support.
   // Each model supports a specific subset of effort levels:
-  //   - Opus 4.8 / Opus 4.7 / Sonnet 5: max, xhigh, high, medium, low
-  //   - Opus 4.6 / Sonnet 4.6:           max, high, medium, low  (no xhigh)
-  //   - Opus 4.5 / Sonnet 4.5 / Haiku 4.5: high, medium, low
+  //   - Opus 5 / Opus 4.8 / Opus 4.7 / Sonnet 5: max, xhigh, high, medium, low
+  //   - Opus 4.6 / Sonnet 4.6:                    max, high, medium, low  (no xhigh)
+  //   - Opus 4.5 / Sonnet 4.5 / Haiku 4.5:        high, medium, low
   // Ordered highest-to-lowest for the picker display.
   const ALL_EFFORTS: readonly ThinkingEffort[] = ["max", "xhigh", "high", "medium", "low"];
   const NO_XHIGH_EFFORTS: readonly ThinkingEffort[] = ["max", "high", "medium", "low"];
@@ -279,6 +300,7 @@ function getAnthropicProfile(modelId: string): ModelProfile {
 
   let supportedThinkingEfforts: readonly ThinkingEffort[];
   if (
+    modelId.includes("opus-5") ||
     modelId.includes("opus-4-8") ||
     modelId.includes("opus-4-7") ||
     modelId.includes("sonnet-5")
@@ -314,21 +336,6 @@ function getAnthropicProfile(modelId: string): ModelProfile {
 }
 
 /**
- * Reserve output tokens the way GitHub Copilot does: cap the response reservation at
- * `min(model's native max output, 15% of the context window)`, then give the remainder to the
- * prompt. This mirrors Copilot's model-metadata hydration (vscode-copilot-chat
- * `modelMetadataFetcher._hydrateResolvedModel`), preventing a large native output ceiling
- * (e.g. 128K for Opus 4.8) from eating most of a 200K context window.
- *
- * @example copilotAlignedLimits(200_000, 128_000)   → { maxInputTokens: 170_000, maxOutputTokens: 30_000 }
- * @example copilotAlignedLimits(1_000_000, 128_000) → { maxInputTokens: 872_000, maxOutputTokens: 128_000 }
- */
-function copilotAlignedLimits(contextWindow: number, nativeMaxOutput: number): ModelTokenLimits {
-  const reserve = Math.floor(Math.min(nativeMaxOutput, contextWindow * 0.15));
-  return { maxInputTokens: contextWindow - reserve, maxOutputTokens: reserve };
-}
-
-/**
  * Get token limits for a Claude model based on its normalized model ID
  */
 function getClaudeTokenLimits(
@@ -339,16 +346,18 @@ function getClaudeTokenLimits(
   // `copilotAlignedLimits`. At a 200K window the reserve collapses to 30K (15%) for every
   // model whose native output exceeds 30K; at 1M it uses the native ceiling (15% = 150K > 128K).
 
-  // Claude Opus 4.8, Opus 4.7, and Sonnet 5: 200K default context (or 1M with the
+  // Claude Opus 5, Opus 4.8, Opus 4.7, and Sonnet 5: 200K default context (or 1M with the
   // `context-1m-2025-08-07` beta enabled), 128K native output. The model card headlines a 1M
   // context window, but — like the official Claude Code CLI — the *effective* window defaults
-  // to 200K and opts into 1M via the beta header (Claude Code does this with the `opus[1m]`
-  // model-string suffix). temperature/top_p/top_k unsupported; adaptive thinking only.
+  // to 200K and opts into 1M via the beta header. temperature/top_p/top_k unsupported;
+  // adaptive thinking only.
   // See:
+  //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
   //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
   //   https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-7.html
   //   https://platform.claude.com/docs/en/docs/about-claude/models/overview (Claude Sonnet 5)
   if (
+    normalizedModelId.includes("opus-5") ||
     normalizedModelId.includes("opus-4-8") ||
     normalizedModelId.includes("opus-4-7") ||
     normalizedModelId.includes("sonnet-5")
@@ -438,6 +447,7 @@ function normalizeModelId(modelId: string): string {
  */
 function supports1MContext(modelId: string): boolean {
   return (
+    modelId.includes("opus-5") ||
     modelId.includes("opus-4-8") ||
     modelId.includes("opus-4-7") ||
     modelId.includes("opus-4-6") ||

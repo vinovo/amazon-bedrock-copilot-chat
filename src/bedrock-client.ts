@@ -641,6 +641,16 @@ export class BedrockAPIClient {
       regionalProfileIds: string[];
     }[] = [
       {
+        // Converse API supported. Geo prefixes: us/eu/au (no jp).
+        // Adaptive thinking only (type: "adaptive"); temperature/top_p/top_k unsupported.
+        // 200K default context, opt-in 1M via beta header; 128K native output.
+        // See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html
+        baseModelId: "anthropic.claude-opus-5",
+        displayName: "Claude Opus 5",
+        globalProfileId: hasGlobalProfiles ? "global.anthropic.claude-opus-5" : null,
+        regionalProfileIds: [`${regionPrefix}.anthropic.claude-opus-5`],
+      },
+      {
         // Converse API supported. Geo prefixes: us/eu/jp/au.
         // Adaptive thinking only (type: "adaptive"); temperature/top_p/top_k unsupported.
         // The `effort` parameter defaults to "high" on Opus 4.8 and can be overridden.
