@@ -38029,6 +38029,801 @@ var require_dist_cjs72 = __commonJS((exports2) => {
   tslib_1.__exportStar(require_fromWebToken2(), exports2);
 });
 
+// node_modules/@microsoft/tiktokenizer/dist/bytePairEncode.js
+var require_bytePairEncode = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.bytePairEncode = exports2.BinaryMap = exports2.binaryMapKey = undefined;
+  var binaryMapKey = (k, start, end) => {
+    const length = end - start;
+    const lowerMask = 16777215 >>> Math.max(0, (3 - length) * 8);
+    const lower = (k[start + 0] | k[start + 1] << 8 | k[start + 2] << 16) & lowerMask;
+    const upperMask = 16777215 >>> Math.min(31, Math.max(0, (6 - length) * 8));
+    const upper = (k[start + 3] | k[start + 4] << 8 | k[start + 5] << 16) & upperMask;
+    return lower + 16777216 * upper;
+  };
+  exports2.binaryMapKey = binaryMapKey;
+
+  class BinaryMap {
+    constructor() {
+      this.nested = new Map;
+      this.final = new Map;
+    }
+    get(key, start = 0, end = key.length) {
+      const isFinal = end < 6 + start;
+      const mapKey = (0, exports2.binaryMapKey)(key, start, end);
+      if (isFinal) {
+        return this.final.get(mapKey);
+      }
+      return this.nested.get(mapKey)?.get(key, 6 + start, end);
+    }
+    set(key, value) {
+      const k = (0, exports2.binaryMapKey)(key, 0, key.length);
+      const isFinal = key.length < 6;
+      if (isFinal) {
+        this.final.set(k, value);
+        return;
+      }
+      const existing = this.nested.get(k);
+      if (existing instanceof BinaryMap) {
+        existing.set(key.subarray(6), value);
+      } else {
+        const newMap = new BinaryMap;
+        newMap.set(key.subarray(6), value);
+        this.nested.set(k, newMap);
+      }
+    }
+  }
+  exports2.BinaryMap = BinaryMap;
+  var ranksBuf = new Int32Array(128);
+  var indicesBuf = new Int32Array(128);
+  function bytePairEncode(mergingBytes, ranks, length) {
+    if (length === 1) {
+      return [ranks.get(mergingBytes)];
+    }
+    let minRank = 2147483647;
+    let minIndex = -1;
+    while (ranksBuf.length < length * 2) {
+      indicesBuf = new Int32Array(indicesBuf.length * 2);
+      ranksBuf = new Int32Array(ranksBuf.length * 2);
+    }
+    for (let i = 0;i < length - 1; i++) {
+      const rank = ranks.get(mergingBytes, i, i + 2) ?? 2147483647;
+      if (rank < minRank) {
+        minRank = rank;
+        minIndex = i;
+      }
+      indicesBuf[i] = i;
+      ranksBuf[i] = rank;
+    }
+    indicesBuf[length - 1] = length - 1;
+    ranksBuf[length - 1] = 2147483647;
+    indicesBuf[length] = length;
+    ranksBuf[length] = 2147483647;
+    let maxIndex = length + 1;
+    function getRank(startIndex, skip = 0) {
+      if (startIndex + skip + 2 < maxIndex) {
+        const rank = ranks.get(mergingBytes, indicesBuf[startIndex], indicesBuf[startIndex + skip + 2]);
+        if (rank !== undefined) {
+          return rank;
+        }
+      }
+      return 2147483647;
+    }
+    while (minRank !== 2147483647) {
+      ranksBuf[indicesBuf[minIndex]] = getRank(minIndex, 1);
+      if (minIndex > 0) {
+        ranksBuf[indicesBuf[minIndex - 1]] = getRank(minIndex - 1, 1);
+      }
+      for (let i = minIndex + 1;i < maxIndex - 1; i++) {
+        indicesBuf[i] = indicesBuf[i + 1];
+      }
+      maxIndex--;
+      minIndex = -1;
+      minRank = 2147483647;
+      for (let i = 0;i < maxIndex - 1; i++) {
+        const rank = ranksBuf[indicesBuf[i]];
+        if (ranksBuf[indicesBuf[i]] < minRank) {
+          minRank = rank;
+          minIndex = i;
+        }
+      }
+    }
+    const outList = [];
+    for (let i = 0;i < maxIndex - 1; i++) {
+      outList.push(ranks.get(mergingBytes, indicesBuf[i], indicesBuf[i + 1]));
+    }
+    return outList;
+  }
+  exports2.bytePairEncode = bytePairEncode;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/textEncoder.js
+var require_textEncoder = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.makeTextEncoder = undefined;
+
+  class UniversalTextEncoder {
+    constructor() {
+      this.length = 0;
+      this.encoder = new TextEncoder;
+    }
+    encode(text) {
+      const arr = this.encoder.encode(text);
+      this.length = arr.length;
+      return arr;
+    }
+  }
+
+  class NodeTextEncoder {
+    constructor() {
+      this.buffer = Buffer.alloc(256);
+      this.length = 0;
+    }
+    encode(text) {
+      while (true) {
+        this.length = this.buffer.write(text, "utf8");
+        if (this.length < this.buffer.length - 4) {
+          return this.buffer;
+        }
+        this.buffer = Buffer.alloc(this.length * 2);
+        this.length = this.buffer.write(text);
+      }
+    }
+  }
+  var makeTextEncoder = () => typeof Buffer !== "undefined" ? new NodeTextEncoder : new UniversalTextEncoder;
+  exports2.makeTextEncoder = makeTextEncoder;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/lru.js
+var require_lru = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.LRUCache = undefined;
+
+  class LRUCache {
+    constructor(size) {
+      this.size = size;
+      this.nodes = new Map;
+    }
+    get(key) {
+      const node = this.nodes.get(key);
+      if (node) {
+        this.moveToHead(node);
+        return node.value;
+      }
+      return;
+    }
+    set(key, value) {
+      const node = this.nodes.get(key);
+      if (node) {
+        node.value = value;
+        this.moveToHead(node);
+      } else {
+        const newNode = new Node(key, value);
+        this.nodes.set(key, newNode);
+        this.addNode(newNode);
+        if (this.nodes.size > this.size) {
+          this.nodes.delete(this.tail.key);
+          this.removeNode(this.tail);
+        }
+      }
+    }
+    moveToHead(node) {
+      this.removeNode(node);
+      node.next = undefined;
+      node.prev = undefined;
+      this.addNode(node);
+    }
+    addNode(node) {
+      if (this.head) {
+        this.head.prev = node;
+        node.next = this.head;
+      }
+      if (!this.tail) {
+        this.tail = node;
+      }
+      this.head = node;
+    }
+    removeNode(node) {
+      if (node.prev) {
+        node.prev.next = node.next;
+      } else {
+        this.head = node.next;
+      }
+      if (node.next) {
+        node.next.prev = node.prev;
+      } else {
+        this.tail = node.prev;
+      }
+    }
+  }
+  exports2.LRUCache = LRUCache;
+
+  class Node {
+    constructor(key, value) {
+      this.key = key;
+      this.value = value;
+    }
+  }
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/tikTokenizer.js
+var require_tikTokenizer = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.TikTokenizer = undefined;
+  var bytePairEncode_1 = require_bytePairEncode();
+  var textEncoder_1 = require_textEncoder();
+  var lru_1 = require_lru();
+  function loadTikTokenBpe(tikTokenBpeFile) {
+    const bpeDict = new Map;
+    try {
+      const fs = require("fs");
+      const fileContent = fs.readFileSync(tikTokenBpeFile, "utf-8");
+      processBpeRanks(fileContent);
+      return bpeDict;
+    } catch (ex) {
+      throw new Error(`Failed to load from BPE encoder file stream: ${ex}`);
+    }
+    function processBpeRanks(fileContent) {
+      for (const line of fileContent.split(/[\r\n]+/)) {
+        if (line.trim() === "") {
+          continue;
+        }
+        const tokens = line.split(" ");
+        if (tokens.length !== 2) {
+          throw new Error("Invalid format in the BPE encoder file stream");
+        }
+        const tokenBytes = new Uint8Array(Buffer.from(tokens[0], "base64"));
+        const rank = parseInt(tokens[1]);
+        if (!isNaN(rank)) {
+          bpeDict.set(tokenBytes, rank);
+        } else {
+          throw new Error(`Can't parse ${tokens[1]} to integer`);
+        }
+      }
+    }
+  }
+  function escapeRegExp(regex) {
+    return regex.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  class TikTokenizer {
+    constructor(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize = 8192) {
+      this.textEncoder = (0, textEncoder_1.makeTextEncoder)();
+      this.textDecoder = new TextDecoder("utf-8");
+      this.cache = new lru_1.LRUCache(cacheSize);
+      const bpeDict = typeof tikTokenBpeFileOrDict === "string" ? loadTikTokenBpe(tikTokenBpeFileOrDict) : tikTokenBpeFileOrDict;
+      this.init(bpeDict, specialTokensEncoder, regexPattern);
+    }
+    init(bpeDict, specialTokensEncoder, regexPattern) {
+      this.encoder = new bytePairEncode_1.BinaryMap;
+      for (const [key, value] of bpeDict) {
+        this.encoder.set(key, value);
+      }
+      this.regex = new RegExp(regexPattern, "gu");
+      this.specialTokensRegex = new RegExp(Array.from(specialTokensEncoder.keys()).map((s) => escapeRegExp(s)).join("|"));
+      this.specialTokensEncoder = specialTokensEncoder;
+      this.decoder = new Map;
+      for (const [key, value] of bpeDict) {
+        this.decoder.set(value, key);
+      }
+      if (bpeDict.size !== this.decoder.size) {
+        throw new Error("Encoder and decoder sizes do not match");
+      }
+      this.specialTokensDecoder = new Map;
+      for (const [key, value] of specialTokensEncoder) {
+        this.specialTokensDecoder.set(value, key);
+      }
+    }
+    findNextSpecialToken(text, start, allowedSpecial) {
+      let startFind = start;
+      let nextSpecial = null;
+      if (allowedSpecial && this.specialTokensRegex) {
+        while (true) {
+          nextSpecial = text.slice(startFind).match(this.specialTokensRegex);
+          if (!nextSpecial) {
+            break;
+          }
+          if (allowedSpecial && allowedSpecial.includes(nextSpecial[0])) {
+            break;
+          }
+          startFind += nextSpecial.index + 1;
+        }
+      }
+      const end = nextSpecial ? startFind + nextSpecial.index : text.length;
+      return [nextSpecial, end];
+    }
+    encode(text, allowedSpecial) {
+      const tokenIds = [];
+      let start = 0;
+      while (true) {
+        let nextSpecial;
+        let end;
+        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
+        if (end > start) {
+          this.encodeByIndex(text, tokenIds, start, end);
+        }
+        if (nextSpecial) {
+          start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
+          if (start >= text.length) {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      return tokenIds;
+    }
+    encodeSpecialToken(tokenIds, nextSpecial) {
+      const token = this.specialTokensEncoder?.get(nextSpecial[0]);
+      tokenIds.push(token);
+      return nextSpecial.index + nextSpecial[0].length;
+    }
+    encodeByIndex(text, tokenIds, start, end) {
+      let match;
+      const substring = text.substring(start, end);
+      this.regex.lastIndex = 0;
+      while (match = this.regex.exec(substring)) {
+        const cached = this.cache.get(match[0]);
+        if (cached) {
+          for (const b of cached) {
+            tokenIds.push(b);
+          }
+        } else {
+          const bytes = this.textEncoder.encode(match[0]);
+          const token = this.encoder.get(bytes, 0, this.textEncoder.length);
+          if (token !== undefined) {
+            tokenIds.push(token);
+            this.cache.set(match[0], [token]);
+          } else {
+            const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
+            for (const b of encodedTokens) {
+              tokenIds.push(b);
+            }
+            this.cache.set(match[0], encodedTokens);
+          }
+        }
+      }
+    }
+    encodeTrimSuffixByIndex(text, tokenIds, start, end, maxTokenCount, tokenCount, encodeLength) {
+      let match;
+      const substring = text.substring(start, end);
+      this.regex.lastIndex = 0;
+      while (match = this.regex.exec(substring)) {
+        const piece = match[0];
+        const cachedTokens = this.cache.get(piece);
+        if (cachedTokens) {
+          if (tokenCount + cachedTokens.length <= maxTokenCount) {
+            tokenCount += cachedTokens.length;
+            encodeLength += piece.length;
+            tokenIds.push(...cachedTokens);
+          } else {
+            let remainingTokens = maxTokenCount - tokenCount;
+            tokenCount += remainingTokens;
+            encodeLength += piece.length;
+            tokenIds.push(...cachedTokens.slice(0, remainingTokens));
+            break;
+          }
+        } else {
+          const bytes = this.textEncoder.encode(piece);
+          const token = this.encoder.get(bytes, 0, bytes.length);
+          if (token !== undefined) {
+            this.cache.set(piece, [token]);
+            if (tokenCount + 1 <= maxTokenCount) {
+              tokenCount++;
+              encodeLength += piece.length;
+              tokenIds.push(token);
+            } else {
+              break;
+            }
+          } else {
+            const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
+            this.cache.set(piece, encodedTokens);
+            if (tokenCount + encodedTokens.length <= maxTokenCount) {
+              tokenCount += encodedTokens.length;
+              encodeLength += piece.length;
+              for (const b of encodedTokens) {
+                tokenIds.push(b);
+              }
+            } else {
+              let remainingTokens = maxTokenCount - tokenCount;
+              tokenCount += remainingTokens;
+              encodeLength += piece.length;
+              for (let i = 0;i < remainingTokens; i++) {
+                tokenIds.push(encodedTokens[i]);
+              }
+              break;
+            }
+          }
+        }
+        if (tokenCount >= maxTokenCount) {
+          break;
+        }
+      }
+      return { tokenCount, encodeLength };
+    }
+    encodeTrimSuffix(text, maxTokenCount, allowedSpecial) {
+      const tokenIds = [];
+      let start = 0;
+      let tokenCount = 0;
+      let encodeLength = 0;
+      while (true) {
+        let nextSpecial;
+        let end;
+        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
+        if (end > start) {
+          const { tokenCount: newTokenCount, encodeLength: newEncodeLength } = this.encodeTrimSuffixByIndex(text, tokenIds, start, end, maxTokenCount, tokenCount, encodeLength);
+          tokenCount = newTokenCount;
+          encodeLength = newEncodeLength;
+          if (tokenCount >= maxTokenCount) {
+            break;
+          }
+        }
+        if (nextSpecial !== null) {
+          tokenCount++;
+          if (tokenCount <= maxTokenCount) {
+            start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
+            encodeLength += nextSpecial[0].length;
+            if (start >= text.length) {
+              break;
+            }
+          }
+          if (tokenCount >= maxTokenCount) {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      const encodedText = encodeLength === text.length ? text : text.slice(0, encodeLength);
+      return { tokenIds, text: encodedText };
+    }
+    encodeTrimPrefix(text, maxTokenCount, allowedSpecial) {
+      const tokenIds = [];
+      let start = 0;
+      let tokenCount = 0;
+      let encodeLength = 0;
+      const tokenCountMap = new Map;
+      tokenCountMap.set(tokenCount, encodeLength);
+      while (true) {
+        let nextSpecial;
+        let end;
+        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
+        if (end > start) {
+          let match;
+          const substring = text.substring(start, end);
+          this.regex.lastIndex = 0;
+          while (match = this.regex.exec(substring)) {
+            const piece = match[0];
+            const cachedTokens = this.cache.get(piece);
+            if (cachedTokens) {
+              tokenCount += cachedTokens.length;
+              encodeLength += piece.length;
+              tokenIds.push(...cachedTokens);
+              tokenCountMap.set(tokenCount, encodeLength);
+            } else {
+              const bytes = this.textEncoder.encode(piece);
+              const token = this.encoder.get(bytes);
+              if (token !== undefined) {
+                this.cache.set(piece, [token]);
+                tokenCount++;
+                encodeLength += piece.length;
+                tokenIds.push(token);
+                tokenCountMap.set(tokenCount, encodeLength);
+              } else {
+                const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
+                this.cache.set(piece, encodedTokens);
+                tokenCount += encodedTokens.length;
+                encodeLength += piece.length;
+                for (const b of encodedTokens) {
+                  tokenIds.push(b);
+                }
+                tokenCountMap.set(tokenCount, encodeLength);
+              }
+            }
+          }
+        }
+        if (nextSpecial !== null) {
+          start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
+          tokenCount++;
+          encodeLength += nextSpecial[0].length;
+          tokenCountMap.set(tokenCount, encodeLength);
+          if (start >= text.length) {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      if (tokenCount <= maxTokenCount) {
+        return { tokenIds, text };
+      }
+      const prefixTokenCount = tokenCount - maxTokenCount;
+      let actualPrefixTokenCount = 0;
+      let actualPrefixStrLength = 0;
+      for (const [key, value] of tokenCountMap) {
+        if (key >= prefixTokenCount) {
+          actualPrefixTokenCount = key;
+          actualPrefixStrLength = value;
+          break;
+        }
+      }
+      if (actualPrefixTokenCount > maxTokenCount) {
+        const encodedTokens = this.encode(text, allowedSpecial);
+        const slicedTokens = encodedTokens.slice(encodedTokens.length - maxTokenCount);
+        return {
+          tokenIds: slicedTokens,
+          text: this.decode(slicedTokens)
+        };
+      }
+      return {
+        tokenIds: tokenIds.slice(actualPrefixTokenCount),
+        text: text.slice(actualPrefixStrLength)
+      };
+    }
+    decode(tokens) {
+      const decoded = [];
+      for (const token of tokens) {
+        let tokenBytes = [];
+        const value = this.decoder?.get(token);
+        if (value !== undefined) {
+          tokenBytes = Array.from(value);
+        } else {
+          const specialTokenValue = this.specialTokensDecoder?.get(token);
+          if (specialTokenValue !== undefined) {
+            const bytes = this.textEncoder.encode(specialTokenValue);
+            tokenBytes = Array.from(bytes.subarray(0, this.textEncoder.length));
+          }
+        }
+        decoded.push(...tokenBytes);
+      }
+      return this.textDecoder.decode(new Uint8Array(decoded));
+    }
+  }
+  exports2.TikTokenizer = TikTokenizer;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/tokenizerBuilder.js
+var require_tokenizerBuilder = __commonJS((exports2) => {
+  var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\node_modules\\@microsoft\\tiktokenizer\\dist";
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.MODEL_TO_ENCODING = undefined;
+  var tikTokenizer_1 = require_tikTokenizer();
+  var MODEL_PREFIX_TO_ENCODING = new Map([
+    ["gpt-4o-", "o200k_base"],
+    ["gpt-4-", "cl100k_base"],
+    ["gpt-3.5-turbo-", "cl100k_base"],
+    ["gpt-35-turbo-", "cl100k_base"]
+  ]);
+  exports2.MODEL_TO_ENCODING = new Map([
+    ["gpt-4o", "o200k_base"],
+    ["gpt-4", "cl100k_base"],
+    ["gpt-3.5-turbo", "cl100k_base"],
+    ["text-davinci-003", "p50k_base"],
+    ["text-davinci-002", "p50k_base"],
+    ["text-davinci-001", "r50k_base"],
+    ["text-curie-001", "r50k_base"],
+    ["text-babbage-001", "r50k_base"],
+    ["text-ada-001", "r50k_base"],
+    ["davinci", "r50k_base"],
+    ["curie", "r50k_base"],
+    ["babbage", "r50k_base"],
+    ["ada", "r50k_base"],
+    ["code-davinci-002", "p50k_base"],
+    ["code-davinci-001", "p50k_base"],
+    ["code-cushman-002", "p50k_base"],
+    ["code-cushman-001", "p50k_base"],
+    ["davinci-codex", "p50k_base"],
+    ["cushman-codex", "p50k_base"],
+    ["text-davinci-edit-001", "p50k_edit"],
+    ["code-davinci-edit-001", "p50k_edit"],
+    ["text-embedding-ada-002", "cl100k_base"],
+    ["text-similarity-davinci-001", "r50k_base"],
+    ["text-similarity-curie-001", "r50k_base"],
+    ["text-similarity-babbage-001", "r50k_base"],
+    ["text-similarity-ada-001", "r50k_base"],
+    ["text-search-davinci-doc-001", "r50k_base"],
+    ["text-search-curie-doc-001", "r50k_base"],
+    ["text-search-babbage-doc-001", "r50k_base"],
+    ["text-search-ada-doc-001", "r50k_base"],
+    ["code-search-babbage-code-001", "r50k_base"],
+    ["code-search-ada-code-001", "r50k_base"],
+    ["gpt2", "gpt2"]
+  ]);
+  var ENDOFTEXT = "<|endoftext|>";
+  var FIM_PREFIX = "<|fim_prefix|>";
+  var FIM_MIDDLE = "<|fim_middle|>";
+  var FIM_SUFFIX = "<|fim_suffix|>";
+  var ENDOFPROMPT = "<|endofprompt|>";
+  var REGEX_PATTERN_1 = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
+  var REGEX_PATTERN_2 = "(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+  var patterns = [
+    `[^\r
+\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)?`,
+    `[^\r
+\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)?`,
+    `\\p{N}{1,3}`,
+    ` ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*`,
+    `\\s*[\\r\\n]+`,
+    `\\s+(?!\\S)`,
+    `\\s+`
+  ];
+  var REGEX_PATTERN_3 = patterns.join("|");
+  function getEncoderFromModelName(modelName) {
+    let encoder = "";
+    if (!exports2.MODEL_TO_ENCODING.has(modelName)) {
+      for (const [prefix, encoding] of MODEL_PREFIX_TO_ENCODING) {
+        if (modelName.startsWith(prefix)) {
+          encoder = encoding;
+          break;
+        }
+      }
+    } else {
+      encoder = exports2.MODEL_TO_ENCODING.get(modelName);
+    }
+    return encoder;
+  }
+  async function fetchAndSaveFile(mergeableRanksFileUrl, filePath) {
+    const fs = require("fs");
+    const response = await fetch(mergeableRanksFileUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch file from ${mergeableRanksFileUrl}. Status code: ${response.status}`);
+    }
+    const text = await response.text();
+    fs.writeFileSync(filePath, text);
+  }
+  function getSpecialTokensByEncoder(encoder) {
+    let specialTokens = new Map([[ENDOFTEXT, 50256]]);
+    switch (encoder) {
+      case "o200k_base":
+        specialTokens = new Map([
+          [ENDOFTEXT, 199999],
+          [ENDOFPROMPT, 200018]
+        ]);
+        break;
+      case "cl100k_base":
+        specialTokens = new Map([
+          [ENDOFTEXT, 100257],
+          [FIM_PREFIX, 100258],
+          [FIM_MIDDLE, 100259],
+          [FIM_SUFFIX, 100260],
+          [ENDOFPROMPT, 100276]
+        ]);
+        break;
+      case "p50k_edit":
+        specialTokens = new Map([
+          [ENDOFTEXT, 50256],
+          [FIM_PREFIX, 50281],
+          [FIM_MIDDLE, 50282],
+          [FIM_SUFFIX, 50283]
+        ]);
+        break;
+      default:
+        break;
+    }
+    return specialTokens;
+  }
+  exports2.getSpecialTokensByEncoder = getSpecialTokensByEncoder;
+  function getSpecialTokensByModel(modelName) {
+    const encoderName = getEncoderFromModelName(modelName);
+    const specialTokens = getSpecialTokensByEncoder(encoderName);
+    return specialTokens;
+  }
+  exports2.getSpecialTokensByModel = getSpecialTokensByModel;
+  function getRegexByEncoder(encoder) {
+    switch (encoder) {
+      case "o200k_base":
+        return REGEX_PATTERN_3;
+      case "cl100k_base":
+        return REGEX_PATTERN_2;
+      default:
+        break;
+    }
+    return REGEX_PATTERN_1;
+  }
+  exports2.getRegexByEncoder = getRegexByEncoder;
+  function getRegexByModel(modelName) {
+    const encoderName = getEncoderFromModelName(modelName);
+    const regexPattern = getRegexByEncoder(encoderName);
+    return regexPattern;
+  }
+  exports2.getRegexByModel = getRegexByModel;
+  async function createByModelName(modelName, extraSpecialTokens = null) {
+    return createByEncoderName(getEncoderFromModelName(modelName), extraSpecialTokens);
+  }
+  exports2.createByModelName = createByModelName;
+  async function createByEncoderName(encoderName, extraSpecialTokens = null) {
+    let regexPattern;
+    let mergeableRanksFileUrl;
+    let specialTokens = getSpecialTokensByEncoder(encoderName);
+    switch (encoderName) {
+      case "o200k_base":
+        regexPattern = REGEX_PATTERN_3;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken`;
+        break;
+      case "cl100k_base":
+        regexPattern = REGEX_PATTERN_2;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken`;
+        break;
+      case "p50k_base":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/p50k_base.tiktoken`;
+        break;
+      case "p50k_edit":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/p50k_base.tiktoken`;
+        break;
+      case "r50k_base":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/r50k_base.tiktoken`;
+        break;
+      case "gpt2":
+        regexPattern = REGEX_PATTERN_1;
+        mergeableRanksFileUrl = `https://raw.githubusercontent.com/microsoft/Tokenizer/main/model/gpt2.tiktoken`;
+        break;
+      default:
+        throw new Error(`Doesn't support this encoder [${encoderName}]`);
+    }
+    if (extraSpecialTokens !== null) {
+      specialTokens = new Map([...specialTokens, ...extraSpecialTokens]);
+    }
+    const fs = require("fs");
+    const path = require("path");
+    const fileName = path.basename(mergeableRanksFileUrl);
+    const dirPath = path.resolve(__dirname, "..", "model");
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+    const filePath = path.resolve(dirPath, fileName);
+    if (!fs.existsSync(filePath)) {
+      console.log(`Downloading file from ${mergeableRanksFileUrl}`);
+      await fetchAndSaveFile(mergeableRanksFileUrl, filePath);
+      console.log(`Saved file to ${filePath}`);
+    }
+    return createTokenizer(filePath, specialTokens, regexPattern);
+  }
+  exports2.createByEncoderName = createByEncoderName;
+  function createTokenizer(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize = 8192) {
+    const tikTokenizer = new tikTokenizer_1.TikTokenizer(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize);
+    return tikTokenizer;
+  }
+  exports2.createTokenizer = createTokenizer;
+});
+
+// node_modules/@microsoft/tiktokenizer/dist/index.js
+var require_dist = __commonJS((exports2) => {
+  Object.defineProperty(exports2, "__esModule", { value: true });
+  exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.MODEL_TO_ENCODING = exports2.TikTokenizer = undefined;
+  var tikTokenizer_1 = require_tikTokenizer();
+  Object.defineProperty(exports2, "TikTokenizer", { enumerable: true, get: function() {
+    return tikTokenizer_1.TikTokenizer;
+  } });
+  var tokenizerBuilder_1 = require_tokenizerBuilder();
+  Object.defineProperty(exports2, "MODEL_TO_ENCODING", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.MODEL_TO_ENCODING;
+  } });
+  Object.defineProperty(exports2, "getRegexByEncoder", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getRegexByEncoder;
+  } });
+  Object.defineProperty(exports2, "getRegexByModel", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getRegexByModel;
+  } });
+  Object.defineProperty(exports2, "getSpecialTokensByEncoder", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getSpecialTokensByEncoder;
+  } });
+  Object.defineProperty(exports2, "getSpecialTokensByModel", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.getSpecialTokensByModel;
+  } });
+  Object.defineProperty(exports2, "createByModelName", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.createByModelName;
+  } });
+  Object.defineProperty(exports2, "createByEncoderName", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.createByEncoderName;
+  } });
+  Object.defineProperty(exports2, "createTokenizer", { enumerable: true, get: function() {
+    return tokenizerBuilder_1.createTokenizer;
+  } });
+});
+
 // node_modules/@aws-sdk/client-bedrock/dist-cjs/auth/httpAuthSchemeProvider.js
 var require_httpAuthSchemeProvider7 = __commonJS((exports2) => {
   Object.defineProperty(exports2, "__esModule", { value: true });
@@ -52623,801 +53418,6 @@ var require_dist_cjs89 = __commonJS((exports2) => {
   });
 });
 
-// node_modules/@microsoft/tiktokenizer/dist/bytePairEncode.js
-var require_bytePairEncode = __commonJS((exports2) => {
-  Object.defineProperty(exports2, "__esModule", { value: true });
-  exports2.bytePairEncode = exports2.BinaryMap = exports2.binaryMapKey = undefined;
-  var binaryMapKey = (k, start, end) => {
-    const length = end - start;
-    const lowerMask = 16777215 >>> Math.max(0, (3 - length) * 8);
-    const lower = (k[start + 0] | k[start + 1] << 8 | k[start + 2] << 16) & lowerMask;
-    const upperMask = 16777215 >>> Math.min(31, Math.max(0, (6 - length) * 8));
-    const upper = (k[start + 3] | k[start + 4] << 8 | k[start + 5] << 16) & upperMask;
-    return lower + 16777216 * upper;
-  };
-  exports2.binaryMapKey = binaryMapKey;
-
-  class BinaryMap {
-    constructor() {
-      this.nested = new Map;
-      this.final = new Map;
-    }
-    get(key, start = 0, end = key.length) {
-      const isFinal = end < 6 + start;
-      const mapKey = (0, exports2.binaryMapKey)(key, start, end);
-      if (isFinal) {
-        return this.final.get(mapKey);
-      }
-      return this.nested.get(mapKey)?.get(key, 6 + start, end);
-    }
-    set(key, value) {
-      const k = (0, exports2.binaryMapKey)(key, 0, key.length);
-      const isFinal = key.length < 6;
-      if (isFinal) {
-        this.final.set(k, value);
-        return;
-      }
-      const existing = this.nested.get(k);
-      if (existing instanceof BinaryMap) {
-        existing.set(key.subarray(6), value);
-      } else {
-        const newMap = new BinaryMap;
-        newMap.set(key.subarray(6), value);
-        this.nested.set(k, newMap);
-      }
-    }
-  }
-  exports2.BinaryMap = BinaryMap;
-  var ranksBuf = new Int32Array(128);
-  var indicesBuf = new Int32Array(128);
-  function bytePairEncode(mergingBytes, ranks, length) {
-    if (length === 1) {
-      return [ranks.get(mergingBytes)];
-    }
-    let minRank = 2147483647;
-    let minIndex = -1;
-    while (ranksBuf.length < length * 2) {
-      indicesBuf = new Int32Array(indicesBuf.length * 2);
-      ranksBuf = new Int32Array(ranksBuf.length * 2);
-    }
-    for (let i = 0;i < length - 1; i++) {
-      const rank = ranks.get(mergingBytes, i, i + 2) ?? 2147483647;
-      if (rank < minRank) {
-        minRank = rank;
-        minIndex = i;
-      }
-      indicesBuf[i] = i;
-      ranksBuf[i] = rank;
-    }
-    indicesBuf[length - 1] = length - 1;
-    ranksBuf[length - 1] = 2147483647;
-    indicesBuf[length] = length;
-    ranksBuf[length] = 2147483647;
-    let maxIndex = length + 1;
-    function getRank(startIndex, skip = 0) {
-      if (startIndex + skip + 2 < maxIndex) {
-        const rank = ranks.get(mergingBytes, indicesBuf[startIndex], indicesBuf[startIndex + skip + 2]);
-        if (rank !== undefined) {
-          return rank;
-        }
-      }
-      return 2147483647;
-    }
-    while (minRank !== 2147483647) {
-      ranksBuf[indicesBuf[minIndex]] = getRank(minIndex, 1);
-      if (minIndex > 0) {
-        ranksBuf[indicesBuf[minIndex - 1]] = getRank(minIndex - 1, 1);
-      }
-      for (let i = minIndex + 1;i < maxIndex - 1; i++) {
-        indicesBuf[i] = indicesBuf[i + 1];
-      }
-      maxIndex--;
-      minIndex = -1;
-      minRank = 2147483647;
-      for (let i = 0;i < maxIndex - 1; i++) {
-        const rank = ranksBuf[indicesBuf[i]];
-        if (ranksBuf[indicesBuf[i]] < minRank) {
-          minRank = rank;
-          minIndex = i;
-        }
-      }
-    }
-    const outList = [];
-    for (let i = 0;i < maxIndex - 1; i++) {
-      outList.push(ranks.get(mergingBytes, indicesBuf[i], indicesBuf[i + 1]));
-    }
-    return outList;
-  }
-  exports2.bytePairEncode = bytePairEncode;
-});
-
-// node_modules/@microsoft/tiktokenizer/dist/textEncoder.js
-var require_textEncoder = __commonJS((exports2) => {
-  Object.defineProperty(exports2, "__esModule", { value: true });
-  exports2.makeTextEncoder = undefined;
-
-  class UniversalTextEncoder {
-    constructor() {
-      this.length = 0;
-      this.encoder = new TextEncoder;
-    }
-    encode(text) {
-      const arr = this.encoder.encode(text);
-      this.length = arr.length;
-      return arr;
-    }
-  }
-
-  class NodeTextEncoder {
-    constructor() {
-      this.buffer = Buffer.alloc(256);
-      this.length = 0;
-    }
-    encode(text) {
-      while (true) {
-        this.length = this.buffer.write(text, "utf8");
-        if (this.length < this.buffer.length - 4) {
-          return this.buffer;
-        }
-        this.buffer = Buffer.alloc(this.length * 2);
-        this.length = this.buffer.write(text);
-      }
-    }
-  }
-  var makeTextEncoder = () => typeof Buffer !== "undefined" ? new NodeTextEncoder : new UniversalTextEncoder;
-  exports2.makeTextEncoder = makeTextEncoder;
-});
-
-// node_modules/@microsoft/tiktokenizer/dist/lru.js
-var require_lru = __commonJS((exports2) => {
-  Object.defineProperty(exports2, "__esModule", { value: true });
-  exports2.LRUCache = undefined;
-
-  class LRUCache {
-    constructor(size) {
-      this.size = size;
-      this.nodes = new Map;
-    }
-    get(key) {
-      const node = this.nodes.get(key);
-      if (node) {
-        this.moveToHead(node);
-        return node.value;
-      }
-      return;
-    }
-    set(key, value) {
-      const node = this.nodes.get(key);
-      if (node) {
-        node.value = value;
-        this.moveToHead(node);
-      } else {
-        const newNode = new Node(key, value);
-        this.nodes.set(key, newNode);
-        this.addNode(newNode);
-        if (this.nodes.size > this.size) {
-          this.nodes.delete(this.tail.key);
-          this.removeNode(this.tail);
-        }
-      }
-    }
-    moveToHead(node) {
-      this.removeNode(node);
-      node.next = undefined;
-      node.prev = undefined;
-      this.addNode(node);
-    }
-    addNode(node) {
-      if (this.head) {
-        this.head.prev = node;
-        node.next = this.head;
-      }
-      if (!this.tail) {
-        this.tail = node;
-      }
-      this.head = node;
-    }
-    removeNode(node) {
-      if (node.prev) {
-        node.prev.next = node.next;
-      } else {
-        this.head = node.next;
-      }
-      if (node.next) {
-        node.next.prev = node.prev;
-      } else {
-        this.tail = node.prev;
-      }
-    }
-  }
-  exports2.LRUCache = LRUCache;
-
-  class Node {
-    constructor(key, value) {
-      this.key = key;
-      this.value = value;
-    }
-  }
-});
-
-// node_modules/@microsoft/tiktokenizer/dist/tikTokenizer.js
-var require_tikTokenizer = __commonJS((exports2) => {
-  Object.defineProperty(exports2, "__esModule", { value: true });
-  exports2.TikTokenizer = undefined;
-  var bytePairEncode_1 = require_bytePairEncode();
-  var textEncoder_1 = require_textEncoder();
-  var lru_1 = require_lru();
-  function loadTikTokenBpe(tikTokenBpeFile) {
-    const bpeDict = new Map;
-    try {
-      const fs = require("fs");
-      const fileContent = fs.readFileSync(tikTokenBpeFile, "utf-8");
-      processBpeRanks(fileContent);
-      return bpeDict;
-    } catch (ex) {
-      throw new Error(`Failed to load from BPE encoder file stream: ${ex}`);
-    }
-    function processBpeRanks(fileContent) {
-      for (const line of fileContent.split(/[\r\n]+/)) {
-        if (line.trim() === "") {
-          continue;
-        }
-        const tokens = line.split(" ");
-        if (tokens.length !== 2) {
-          throw new Error("Invalid format in the BPE encoder file stream");
-        }
-        const tokenBytes = new Uint8Array(Buffer.from(tokens[0], "base64"));
-        const rank = parseInt(tokens[1]);
-        if (!isNaN(rank)) {
-          bpeDict.set(tokenBytes, rank);
-        } else {
-          throw new Error(`Can't parse ${tokens[1]} to integer`);
-        }
-      }
-    }
-  }
-  function escapeRegExp(regex) {
-    return regex.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-
-  class TikTokenizer {
-    constructor(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize = 8192) {
-      this.textEncoder = (0, textEncoder_1.makeTextEncoder)();
-      this.textDecoder = new TextDecoder("utf-8");
-      this.cache = new lru_1.LRUCache(cacheSize);
-      const bpeDict = typeof tikTokenBpeFileOrDict === "string" ? loadTikTokenBpe(tikTokenBpeFileOrDict) : tikTokenBpeFileOrDict;
-      this.init(bpeDict, specialTokensEncoder, regexPattern);
-    }
-    init(bpeDict, specialTokensEncoder, regexPattern) {
-      this.encoder = new bytePairEncode_1.BinaryMap;
-      for (const [key, value] of bpeDict) {
-        this.encoder.set(key, value);
-      }
-      this.regex = new RegExp(regexPattern, "gu");
-      this.specialTokensRegex = new RegExp(Array.from(specialTokensEncoder.keys()).map((s) => escapeRegExp(s)).join("|"));
-      this.specialTokensEncoder = specialTokensEncoder;
-      this.decoder = new Map;
-      for (const [key, value] of bpeDict) {
-        this.decoder.set(value, key);
-      }
-      if (bpeDict.size !== this.decoder.size) {
-        throw new Error("Encoder and decoder sizes do not match");
-      }
-      this.specialTokensDecoder = new Map;
-      for (const [key, value] of specialTokensEncoder) {
-        this.specialTokensDecoder.set(value, key);
-      }
-    }
-    findNextSpecialToken(text, start, allowedSpecial) {
-      let startFind = start;
-      let nextSpecial = null;
-      if (allowedSpecial && this.specialTokensRegex) {
-        while (true) {
-          nextSpecial = text.slice(startFind).match(this.specialTokensRegex);
-          if (!nextSpecial) {
-            break;
-          }
-          if (allowedSpecial && allowedSpecial.includes(nextSpecial[0])) {
-            break;
-          }
-          startFind += nextSpecial.index + 1;
-        }
-      }
-      const end = nextSpecial ? startFind + nextSpecial.index : text.length;
-      return [nextSpecial, end];
-    }
-    encode(text, allowedSpecial) {
-      const tokenIds = [];
-      let start = 0;
-      while (true) {
-        let nextSpecial;
-        let end;
-        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
-        if (end > start) {
-          this.encodeByIndex(text, tokenIds, start, end);
-        }
-        if (nextSpecial) {
-          start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
-          if (start >= text.length) {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-      return tokenIds;
-    }
-    encodeSpecialToken(tokenIds, nextSpecial) {
-      const token = this.specialTokensEncoder?.get(nextSpecial[0]);
-      tokenIds.push(token);
-      return nextSpecial.index + nextSpecial[0].length;
-    }
-    encodeByIndex(text, tokenIds, start, end) {
-      let match;
-      const substring = text.substring(start, end);
-      this.regex.lastIndex = 0;
-      while (match = this.regex.exec(substring)) {
-        const cached = this.cache.get(match[0]);
-        if (cached) {
-          for (const b of cached) {
-            tokenIds.push(b);
-          }
-        } else {
-          const bytes = this.textEncoder.encode(match[0]);
-          const token = this.encoder.get(bytes, 0, this.textEncoder.length);
-          if (token !== undefined) {
-            tokenIds.push(token);
-            this.cache.set(match[0], [token]);
-          } else {
-            const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
-            for (const b of encodedTokens) {
-              tokenIds.push(b);
-            }
-            this.cache.set(match[0], encodedTokens);
-          }
-        }
-      }
-    }
-    encodeTrimSuffixByIndex(text, tokenIds, start, end, maxTokenCount, tokenCount, encodeLength) {
-      let match;
-      const substring = text.substring(start, end);
-      this.regex.lastIndex = 0;
-      while (match = this.regex.exec(substring)) {
-        const piece = match[0];
-        const cachedTokens = this.cache.get(piece);
-        if (cachedTokens) {
-          if (tokenCount + cachedTokens.length <= maxTokenCount) {
-            tokenCount += cachedTokens.length;
-            encodeLength += piece.length;
-            tokenIds.push(...cachedTokens);
-          } else {
-            let remainingTokens = maxTokenCount - tokenCount;
-            tokenCount += remainingTokens;
-            encodeLength += piece.length;
-            tokenIds.push(...cachedTokens.slice(0, remainingTokens));
-            break;
-          }
-        } else {
-          const bytes = this.textEncoder.encode(piece);
-          const token = this.encoder.get(bytes, 0, bytes.length);
-          if (token !== undefined) {
-            this.cache.set(piece, [token]);
-            if (tokenCount + 1 <= maxTokenCount) {
-              tokenCount++;
-              encodeLength += piece.length;
-              tokenIds.push(token);
-            } else {
-              break;
-            }
-          } else {
-            const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
-            this.cache.set(piece, encodedTokens);
-            if (tokenCount + encodedTokens.length <= maxTokenCount) {
-              tokenCount += encodedTokens.length;
-              encodeLength += piece.length;
-              for (const b of encodedTokens) {
-                tokenIds.push(b);
-              }
-            } else {
-              let remainingTokens = maxTokenCount - tokenCount;
-              tokenCount += remainingTokens;
-              encodeLength += piece.length;
-              for (let i = 0;i < remainingTokens; i++) {
-                tokenIds.push(encodedTokens[i]);
-              }
-              break;
-            }
-          }
-        }
-        if (tokenCount >= maxTokenCount) {
-          break;
-        }
-      }
-      return { tokenCount, encodeLength };
-    }
-    encodeTrimSuffix(text, maxTokenCount, allowedSpecial) {
-      const tokenIds = [];
-      let start = 0;
-      let tokenCount = 0;
-      let encodeLength = 0;
-      while (true) {
-        let nextSpecial;
-        let end;
-        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
-        if (end > start) {
-          const { tokenCount: newTokenCount, encodeLength: newEncodeLength } = this.encodeTrimSuffixByIndex(text, tokenIds, start, end, maxTokenCount, tokenCount, encodeLength);
-          tokenCount = newTokenCount;
-          encodeLength = newEncodeLength;
-          if (tokenCount >= maxTokenCount) {
-            break;
-          }
-        }
-        if (nextSpecial !== null) {
-          tokenCount++;
-          if (tokenCount <= maxTokenCount) {
-            start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
-            encodeLength += nextSpecial[0].length;
-            if (start >= text.length) {
-              break;
-            }
-          }
-          if (tokenCount >= maxTokenCount) {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-      const encodedText = encodeLength === text.length ? text : text.slice(0, encodeLength);
-      return { tokenIds, text: encodedText };
-    }
-    encodeTrimPrefix(text, maxTokenCount, allowedSpecial) {
-      const tokenIds = [];
-      let start = 0;
-      let tokenCount = 0;
-      let encodeLength = 0;
-      const tokenCountMap = new Map;
-      tokenCountMap.set(tokenCount, encodeLength);
-      while (true) {
-        let nextSpecial;
-        let end;
-        [nextSpecial, end] = this.findNextSpecialToken(text, start, allowedSpecial);
-        if (end > start) {
-          let match;
-          const substring = text.substring(start, end);
-          this.regex.lastIndex = 0;
-          while (match = this.regex.exec(substring)) {
-            const piece = match[0];
-            const cachedTokens = this.cache.get(piece);
-            if (cachedTokens) {
-              tokenCount += cachedTokens.length;
-              encodeLength += piece.length;
-              tokenIds.push(...cachedTokens);
-              tokenCountMap.set(tokenCount, encodeLength);
-            } else {
-              const bytes = this.textEncoder.encode(piece);
-              const token = this.encoder.get(bytes);
-              if (token !== undefined) {
-                this.cache.set(piece, [token]);
-                tokenCount++;
-                encodeLength += piece.length;
-                tokenIds.push(token);
-                tokenCountMap.set(tokenCount, encodeLength);
-              } else {
-                const encodedTokens = (0, bytePairEncode_1.bytePairEncode)(bytes, this.encoder, this.textEncoder.length);
-                this.cache.set(piece, encodedTokens);
-                tokenCount += encodedTokens.length;
-                encodeLength += piece.length;
-                for (const b of encodedTokens) {
-                  tokenIds.push(b);
-                }
-                tokenCountMap.set(tokenCount, encodeLength);
-              }
-            }
-          }
-        }
-        if (nextSpecial !== null) {
-          start = start + this.encodeSpecialToken(tokenIds, nextSpecial);
-          tokenCount++;
-          encodeLength += nextSpecial[0].length;
-          tokenCountMap.set(tokenCount, encodeLength);
-          if (start >= text.length) {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-      if (tokenCount <= maxTokenCount) {
-        return { tokenIds, text };
-      }
-      const prefixTokenCount = tokenCount - maxTokenCount;
-      let actualPrefixTokenCount = 0;
-      let actualPrefixStrLength = 0;
-      for (const [key, value] of tokenCountMap) {
-        if (key >= prefixTokenCount) {
-          actualPrefixTokenCount = key;
-          actualPrefixStrLength = value;
-          break;
-        }
-      }
-      if (actualPrefixTokenCount > maxTokenCount) {
-        const encodedTokens = this.encode(text, allowedSpecial);
-        const slicedTokens = encodedTokens.slice(encodedTokens.length - maxTokenCount);
-        return {
-          tokenIds: slicedTokens,
-          text: this.decode(slicedTokens)
-        };
-      }
-      return {
-        tokenIds: tokenIds.slice(actualPrefixTokenCount),
-        text: text.slice(actualPrefixStrLength)
-      };
-    }
-    decode(tokens) {
-      const decoded = [];
-      for (const token of tokens) {
-        let tokenBytes = [];
-        const value = this.decoder?.get(token);
-        if (value !== undefined) {
-          tokenBytes = Array.from(value);
-        } else {
-          const specialTokenValue = this.specialTokensDecoder?.get(token);
-          if (specialTokenValue !== undefined) {
-            const bytes = this.textEncoder.encode(specialTokenValue);
-            tokenBytes = Array.from(bytes.subarray(0, this.textEncoder.length));
-          }
-        }
-        decoded.push(...tokenBytes);
-      }
-      return this.textDecoder.decode(new Uint8Array(decoded));
-    }
-  }
-  exports2.TikTokenizer = TikTokenizer;
-});
-
-// node_modules/@microsoft/tiktokenizer/dist/tokenizerBuilder.js
-var require_tokenizerBuilder = __commonJS((exports2) => {
-  var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\node_modules\\@microsoft\\tiktokenizer\\dist";
-  Object.defineProperty(exports2, "__esModule", { value: true });
-  exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.MODEL_TO_ENCODING = undefined;
-  var tikTokenizer_1 = require_tikTokenizer();
-  var MODEL_PREFIX_TO_ENCODING = new Map([
-    ["gpt-4o-", "o200k_base"],
-    ["gpt-4-", "cl100k_base"],
-    ["gpt-3.5-turbo-", "cl100k_base"],
-    ["gpt-35-turbo-", "cl100k_base"]
-  ]);
-  exports2.MODEL_TO_ENCODING = new Map([
-    ["gpt-4o", "o200k_base"],
-    ["gpt-4", "cl100k_base"],
-    ["gpt-3.5-turbo", "cl100k_base"],
-    ["text-davinci-003", "p50k_base"],
-    ["text-davinci-002", "p50k_base"],
-    ["text-davinci-001", "r50k_base"],
-    ["text-curie-001", "r50k_base"],
-    ["text-babbage-001", "r50k_base"],
-    ["text-ada-001", "r50k_base"],
-    ["davinci", "r50k_base"],
-    ["curie", "r50k_base"],
-    ["babbage", "r50k_base"],
-    ["ada", "r50k_base"],
-    ["code-davinci-002", "p50k_base"],
-    ["code-davinci-001", "p50k_base"],
-    ["code-cushman-002", "p50k_base"],
-    ["code-cushman-001", "p50k_base"],
-    ["davinci-codex", "p50k_base"],
-    ["cushman-codex", "p50k_base"],
-    ["text-davinci-edit-001", "p50k_edit"],
-    ["code-davinci-edit-001", "p50k_edit"],
-    ["text-embedding-ada-002", "cl100k_base"],
-    ["text-similarity-davinci-001", "r50k_base"],
-    ["text-similarity-curie-001", "r50k_base"],
-    ["text-similarity-babbage-001", "r50k_base"],
-    ["text-similarity-ada-001", "r50k_base"],
-    ["text-search-davinci-doc-001", "r50k_base"],
-    ["text-search-curie-doc-001", "r50k_base"],
-    ["text-search-babbage-doc-001", "r50k_base"],
-    ["text-search-ada-doc-001", "r50k_base"],
-    ["code-search-babbage-code-001", "r50k_base"],
-    ["code-search-ada-code-001", "r50k_base"],
-    ["gpt2", "gpt2"]
-  ]);
-  var ENDOFTEXT = "<|endoftext|>";
-  var FIM_PREFIX = "<|fim_prefix|>";
-  var FIM_MIDDLE = "<|fim_middle|>";
-  var FIM_SUFFIX = "<|fim_suffix|>";
-  var ENDOFPROMPT = "<|endofprompt|>";
-  var REGEX_PATTERN_1 = "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
-  var REGEX_PATTERN_2 = "(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
-  var patterns = [
-    `[^\r
-\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)?`,
-    `[^\r
-\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'s|'S|'t|'T|'re|'RE|'Re|'eR|'ve|'VE|'vE|'Ve|'m|'M|'ll|'lL|'Ll|'LL|'d|'D)?`,
-    `\\p{N}{1,3}`,
-    ` ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*`,
-    `\\s*[\\r\\n]+`,
-    `\\s+(?!\\S)`,
-    `\\s+`
-  ];
-  var REGEX_PATTERN_3 = patterns.join("|");
-  function getEncoderFromModelName(modelName) {
-    let encoder = "";
-    if (!exports2.MODEL_TO_ENCODING.has(modelName)) {
-      for (const [prefix, encoding] of MODEL_PREFIX_TO_ENCODING) {
-        if (modelName.startsWith(prefix)) {
-          encoder = encoding;
-          break;
-        }
-      }
-    } else {
-      encoder = exports2.MODEL_TO_ENCODING.get(modelName);
-    }
-    return encoder;
-  }
-  async function fetchAndSaveFile(mergeableRanksFileUrl, filePath) {
-    const fs = require("fs");
-    const response = await fetch(mergeableRanksFileUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch file from ${mergeableRanksFileUrl}. Status code: ${response.status}`);
-    }
-    const text = await response.text();
-    fs.writeFileSync(filePath, text);
-  }
-  function getSpecialTokensByEncoder(encoder) {
-    let specialTokens = new Map([[ENDOFTEXT, 50256]]);
-    switch (encoder) {
-      case "o200k_base":
-        specialTokens = new Map([
-          [ENDOFTEXT, 199999],
-          [ENDOFPROMPT, 200018]
-        ]);
-        break;
-      case "cl100k_base":
-        specialTokens = new Map([
-          [ENDOFTEXT, 100257],
-          [FIM_PREFIX, 100258],
-          [FIM_MIDDLE, 100259],
-          [FIM_SUFFIX, 100260],
-          [ENDOFPROMPT, 100276]
-        ]);
-        break;
-      case "p50k_edit":
-        specialTokens = new Map([
-          [ENDOFTEXT, 50256],
-          [FIM_PREFIX, 50281],
-          [FIM_MIDDLE, 50282],
-          [FIM_SUFFIX, 50283]
-        ]);
-        break;
-      default:
-        break;
-    }
-    return specialTokens;
-  }
-  exports2.getSpecialTokensByEncoder = getSpecialTokensByEncoder;
-  function getSpecialTokensByModel(modelName) {
-    const encoderName = getEncoderFromModelName(modelName);
-    const specialTokens = getSpecialTokensByEncoder(encoderName);
-    return specialTokens;
-  }
-  exports2.getSpecialTokensByModel = getSpecialTokensByModel;
-  function getRegexByEncoder(encoder) {
-    switch (encoder) {
-      case "o200k_base":
-        return REGEX_PATTERN_3;
-      case "cl100k_base":
-        return REGEX_PATTERN_2;
-      default:
-        break;
-    }
-    return REGEX_PATTERN_1;
-  }
-  exports2.getRegexByEncoder = getRegexByEncoder;
-  function getRegexByModel(modelName) {
-    const encoderName = getEncoderFromModelName(modelName);
-    const regexPattern = getRegexByEncoder(encoderName);
-    return regexPattern;
-  }
-  exports2.getRegexByModel = getRegexByModel;
-  async function createByModelName(modelName, extraSpecialTokens = null) {
-    return createByEncoderName(getEncoderFromModelName(modelName), extraSpecialTokens);
-  }
-  exports2.createByModelName = createByModelName;
-  async function createByEncoderName(encoderName, extraSpecialTokens = null) {
-    let regexPattern;
-    let mergeableRanksFileUrl;
-    let specialTokens = getSpecialTokensByEncoder(encoderName);
-    switch (encoderName) {
-      case "o200k_base":
-        regexPattern = REGEX_PATTERN_3;
-        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken`;
-        break;
-      case "cl100k_base":
-        regexPattern = REGEX_PATTERN_2;
-        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken`;
-        break;
-      case "p50k_base":
-        regexPattern = REGEX_PATTERN_1;
-        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/p50k_base.tiktoken`;
-        break;
-      case "p50k_edit":
-        regexPattern = REGEX_PATTERN_1;
-        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/p50k_base.tiktoken`;
-        break;
-      case "r50k_base":
-        regexPattern = REGEX_PATTERN_1;
-        mergeableRanksFileUrl = `https://openaipublic.blob.core.windows.net/encodings/r50k_base.tiktoken`;
-        break;
-      case "gpt2":
-        regexPattern = REGEX_PATTERN_1;
-        mergeableRanksFileUrl = `https://raw.githubusercontent.com/microsoft/Tokenizer/main/model/gpt2.tiktoken`;
-        break;
-      default:
-        throw new Error(`Doesn't support this encoder [${encoderName}]`);
-    }
-    if (extraSpecialTokens !== null) {
-      specialTokens = new Map([...specialTokens, ...extraSpecialTokens]);
-    }
-    const fs = require("fs");
-    const path = require("path");
-    const fileName = path.basename(mergeableRanksFileUrl);
-    const dirPath = path.resolve(__dirname, "..", "model");
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-    const filePath = path.resolve(dirPath, fileName);
-    if (!fs.existsSync(filePath)) {
-      console.log(`Downloading file from ${mergeableRanksFileUrl}`);
-      await fetchAndSaveFile(mergeableRanksFileUrl, filePath);
-      console.log(`Saved file to ${filePath}`);
-    }
-    return createTokenizer(filePath, specialTokens, regexPattern);
-  }
-  exports2.createByEncoderName = createByEncoderName;
-  function createTokenizer(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize = 8192) {
-    const tikTokenizer = new tikTokenizer_1.TikTokenizer(tikTokenBpeFileOrDict, specialTokensEncoder, regexPattern, cacheSize);
-    return tikTokenizer;
-  }
-  exports2.createTokenizer = createTokenizer;
-});
-
-// node_modules/@microsoft/tiktokenizer/dist/index.js
-var require_dist = __commonJS((exports2) => {
-  Object.defineProperty(exports2, "__esModule", { value: true });
-  exports2.createTokenizer = exports2.createByEncoderName = exports2.createByModelName = exports2.getSpecialTokensByModel = exports2.getSpecialTokensByEncoder = exports2.getRegexByModel = exports2.getRegexByEncoder = exports2.MODEL_TO_ENCODING = exports2.TikTokenizer = undefined;
-  var tikTokenizer_1 = require_tikTokenizer();
-  Object.defineProperty(exports2, "TikTokenizer", { enumerable: true, get: function() {
-    return tikTokenizer_1.TikTokenizer;
-  } });
-  var tokenizerBuilder_1 = require_tokenizerBuilder();
-  Object.defineProperty(exports2, "MODEL_TO_ENCODING", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.MODEL_TO_ENCODING;
-  } });
-  Object.defineProperty(exports2, "getRegexByEncoder", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.getRegexByEncoder;
-  } });
-  Object.defineProperty(exports2, "getRegexByModel", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.getRegexByModel;
-  } });
-  Object.defineProperty(exports2, "getSpecialTokensByEncoder", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.getSpecialTokensByEncoder;
-  } });
-  Object.defineProperty(exports2, "getSpecialTokensByModel", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.getSpecialTokensByModel;
-  } });
-  Object.defineProperty(exports2, "createByModelName", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.createByModelName;
-  } });
-  Object.defineProperty(exports2, "createByEncoderName", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.createByEncoderName;
-  } });
-  Object.defineProperty(exports2, "createTokenizer", { enumerable: true, get: function() {
-    return tokenizerBuilder_1.createTokenizer;
-  } });
-});
-
 // src/extension.ts
 var exports_extension = {};
 __export(exports_extension, {
@@ -53425,7 +53425,7 @@ __export(exports_extension, {
   activate: () => activate
 });
 module.exports = __toCommonJS(exports_extension);
-var vscode8 = __toESM(require("vscode"));
+var vscode12 = __toESM(require("vscode"));
 
 // src/commands/manage-settings.ts
 var import_client_ssm = __toESM(require_dist_cjs70(), 1);
@@ -53941,10 +53941,932 @@ async function resolveSsmCredentials(globalState, secrets) {
   }
 }
 
+// src/custom/manage-settings.ts
+var vscode5 = __toESM(require("vscode"));
+
+// src/custom/client.ts
+class CustomBackendClient {
+  config;
+  constructor(config) {
+    this.config = config;
+  }
+  async listModels(signal) {
+    const url = this.endpoint("/models");
+    const response = await withInsecureTls(this.config.allowInsecureTls, async () => fetch(url, { headers: this.headers(), signal }));
+    if (!response.ok) {
+      const body = await safeText(response);
+      throw new CustomBackendError(`Model listing failed (${response.status}): ${body}`, response.status);
+    }
+    const json = await response.json();
+    const models = parseModelList(json);
+    logger.debug("[Custom Provider] Model listing response", {
+      discovered: models.length,
+      raw: JSON.stringify(json)?.slice(0, 2000),
+      topLevelKeys: json && typeof json === "object" ? Object.keys(json) : typeof json,
+      url
+    });
+    return models;
+  }
+  setConfig(config) {
+    this.config = config;
+  }
+  async* streamChat(request, signal) {
+    const url = this.endpoint("/chat/completions");
+    const response = await withInsecureTls(this.config.allowInsecureTls, async () => fetch(url, {
+      body: JSON.stringify(request),
+      headers: { ...this.headers(), "content-type": "application/json" },
+      method: "POST",
+      signal
+    }));
+    if (!response.ok || !response.body) {
+      const body = await safeText(response);
+      throw new CustomBackendError(`Chat request failed (${response.status}): ${body}`, response.status);
+    }
+    yield* parseSseStream(response.body);
+  }
+  endpoint(path) {
+    let base = this.config.baseUrl;
+    while (base.endsWith("/")) {
+      base = base.slice(0, -1);
+    }
+    const root = base.endsWith("/v1") ? base : `${base}/v1`;
+    return `${root}${path}`;
+  }
+  headers() {
+    return {
+      accept: "application/json",
+      authorization: `Bearer ${this.config.apiKey}`,
+      "x-api-key": this.config.apiKey
+    };
+  }
+}
+
+class CustomBackendError extends Error {
+  status;
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+    this.name = "CustomBackendError";
+  }
+}
+function extractModelId(obj) {
+  for (const key of ["id", "model", "name", "model_name"]) {
+    const id = firstString(obj[key]);
+    if (id)
+      return id;
+  }
+  return;
+}
+function extractModelList(json) {
+  if (Array.isArray(json)) {
+    return json;
+  }
+  const data = json?.data;
+  if (Array.isArray(data)) {
+    return data;
+  }
+  const models = json?.models;
+  if (Array.isArray(models)) {
+    return models;
+  }
+  return [];
+}
+function firstString(value) {
+  if (typeof value === "string" && value.length > 0)
+    return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === "string" && item.length > 0)
+        return item;
+    }
+  }
+  return;
+}
+function hasCapability(obj, capability) {
+  const capabilities = obj.capabilities;
+  return Array.isArray(capabilities) && capabilities.includes(capability);
+}
+function isChatModel(obj) {
+  const modelType = obj.model_type;
+  if (modelType && typeof modelType.is_chat === "boolean") {
+    return modelType.is_chat;
+  }
+  if (Array.isArray(obj.capabilities)) {
+    return hasCapability(obj, "chat");
+  }
+  return true;
+}
+function parseChoice(choice, result) {
+  if (typeof choice.finish_reason === "string") {
+    result.finishReason = choice.finish_reason;
+  }
+  const delta = choice.delta;
+  if (!delta)
+    return;
+  if (typeof delta.content === "string") {
+    result.content = delta.content;
+  }
+  const toolCalls = delta.tool_calls;
+  if (Array.isArray(toolCalls)) {
+    result.toolCalls = parseToolCallDeltas(toolCalls);
+  }
+}
+function parseChunk(chunk) {
+  if (!chunk || typeof chunk !== "object")
+    return;
+  const obj = chunk;
+  const result = {
+    usage: parseUsage(obj.usage)
+  };
+  const choice = obj.choices?.[0];
+  if (choice) {
+    parseChoice(choice, result);
+  }
+  const hasSomething = result.content !== undefined || result.toolCalls !== undefined || result.finishReason !== undefined || result.usage !== undefined;
+  return hasSomething ? result : undefined;
+}
+function parseModelList(json) {
+  const models = [];
+  const seen = new Set;
+  for (const entry of extractModelList(json)) {
+    if (typeof entry === "string") {
+      if (!seen.has(entry)) {
+        seen.add(entry);
+        models.push({ id: entry });
+      }
+      continue;
+    }
+    if (entry && typeof entry === "object") {
+      const obj = entry;
+      const id = extractModelId(obj);
+      if (!id || seen.has(id) || !isChatModel(obj))
+        continue;
+      seen.add(id);
+      models.push({
+        id,
+        toolCalling: supportsTools(obj),
+        vision: supportsVision(obj)
+      });
+    }
+  }
+  return models;
+}
+function parseSseEvent(rawEvent) {
+  const dataLine = rawEvent.split(`
+`).find((line) => line.startsWith("data:"));
+  if (!dataLine)
+    return;
+  const payload = dataLine.slice("data:".length).trim();
+  if (payload === "[DONE]")
+    return "done";
+  if (!payload)
+    return;
+  let chunk;
+  try {
+    chunk = JSON.parse(payload);
+  } catch (error) {
+    logger.warn("[Custom Provider] Failed to parse SSE chunk", {
+      error: error instanceof Error ? error.message : String(error),
+      payload: payload.slice(0, 200)
+    });
+    return;
+  }
+  return parseChunk(chunk);
+}
+async function* parseSseStream(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder;
+  let buffer = "";
+  try {
+    for (;; ) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary;
+      while ((boundary = buffer.indexOf(`
+
+`)) !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const outcome = parseSseEvent(rawEvent);
+        if (outcome === "done")
+          return;
+        if (outcome)
+          yield outcome;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+function parseToolCallDeltas(toolCalls) {
+  return toolCalls.map((tc) => {
+    const t = tc;
+    const fn = t.function;
+    return {
+      argumentsFragment: typeof fn?.arguments === "string" ? fn.arguments : undefined,
+      id: typeof t.id === "string" ? t.id : undefined,
+      index: typeof t.index === "number" ? t.index : 0,
+      name: typeof fn?.name === "string" ? fn.name : undefined
+    };
+  });
+}
+function parseUsage(usage) {
+  if (!usage)
+    return;
+  return {
+    completionTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
+    promptTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined
+  };
+}
+async function safeText(response) {
+  try {
+    const text = await response.text();
+    return text.slice(0, 500);
+  } catch {
+    return "<no body>";
+  }
+}
+function supportsTools(obj) {
+  const modelType = obj.model_type;
+  if (modelType && typeof modelType.is_tool_supported === "boolean") {
+    return modelType.is_tool_supported;
+  }
+  if (typeof obj.tool_calling === "boolean") {
+    return obj.tool_calling;
+  }
+  return;
+}
+function supportsVision(obj) {
+  if (typeof obj.vision === "boolean") {
+    return obj.vision;
+  }
+  if (hasCapability(obj, "vision") || hasCapability(obj, "image")) {
+    return true;
+  }
+  return;
+}
+async function withInsecureTls(allow, fn) {
+  if (!allow) {
+    return fn();
+  }
+  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  return fn().finally(() => {
+    if (previous === undefined) {
+      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    } else {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+    }
+  });
+}
+
+// src/custom/settings.ts
+var vscode4 = __toESM(require("vscode"));
+var CUSTOM_API_KEY_SECRET = "custom.apiKey";
+async function getCustomBackendSettings(secrets) {
+  const config = vscode4.workspace.getConfiguration("custom");
+  const baseUrl = normalizeBaseUrl(config.get("baseUrl"));
+  const allowInsecureTls = config.get("allowInsecureTls") ?? false;
+  const rawModels = config.get("models") ?? "";
+  const models = rawModels.split(",").map((m) => m.trim()).filter((m) => m.length > 0);
+  const apiKey = await secrets.get(CUSTOM_API_KEY_SECRET) || undefined;
+  return { allowInsecureTls, apiKey, baseUrl, models };
+}
+function toBackendConfig(settings) {
+  if (!settings.baseUrl || !settings.apiKey) {
+    return;
+  }
+  return {
+    allowInsecureTls: settings.allowInsecureTls,
+    apiKey: settings.apiKey,
+    baseUrl: settings.baseUrl
+  };
+}
+function normalizeBaseUrl(value) {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+// src/custom/manage-settings.ts
+async function manageCustomSettings(secrets) {
+  const settings = await getCustomBackendSettings(secrets);
+  const action = await vscode5.window.showQuickPick([
+    {
+      description: settings.baseUrl ? `Current: ${settings.baseUrl}` : "Not set",
+      label: "Set Base URL",
+      value: "baseUrl"
+    },
+    {
+      description: settings.apiKey ? "Configured" : "Not set",
+      label: "Set Access Token",
+      value: "token"
+    },
+    {
+      description: settings.models.length > 0 ? settings.models.join(", ") : "Auto-discover",
+      label: "Set Models (manual, comma-separated)",
+      value: "models"
+    },
+    {
+      description: `Current: ${settings.allowInsecureTls ? "enabled" : "disabled"}`,
+      label: "Toggle Allow Insecure TLS",
+      value: "tls"
+    },
+    { label: "Test Connection", value: "test" },
+    { label: "Clear Settings", value: "clear" }
+  ], { placeHolder: "Choose an action", title: "Manage Custom Model Provider" });
+  if (!action)
+    return;
+  switch (action.value) {
+    case "baseUrl": {
+      await setBaseUrl(settings.baseUrl);
+      break;
+    }
+    case "clear": {
+      await clearSettings(secrets);
+      break;
+    }
+    case "models": {
+      await setModels(settings.models);
+      break;
+    }
+    case "test": {
+      await testConnection(secrets);
+      break;
+    }
+    case "tls": {
+      await toggleTls(settings.allowInsecureTls);
+      break;
+    }
+    case "token": {
+      await setToken(secrets);
+      break;
+    }
+  }
+}
+async function askScope() {
+  const scope = await vscode5.window.showQuickPick([
+    {
+      description: "Save globally for all workspaces",
+      label: "$(globe) User Settings",
+      value: vscode5.ConfigurationTarget.Global
+    },
+    {
+      description: "Save for this workspace only",
+      label: "$(folder) Workspace Settings",
+      value: vscode5.ConfigurationTarget.Workspace
+    }
+  ], { placeHolder: "Where do you want to save this setting?", title: "Configuration Scope" });
+  return scope?.value;
+}
+async function clearSettings(secrets) {
+  const config = vscode5.workspace.getConfiguration("custom");
+  await Promise.all([
+    config.update("baseUrl", undefined, vscode5.ConfigurationTarget.Global),
+    config.update("baseUrl", undefined, vscode5.ConfigurationTarget.Workspace),
+    config.update("models", undefined, vscode5.ConfigurationTarget.Global),
+    config.update("models", undefined, vscode5.ConfigurationTarget.Workspace),
+    config.update("allowInsecureTls", undefined, vscode5.ConfigurationTarget.Global),
+    config.update("allowInsecureTls", undefined, vscode5.ConfigurationTarget.Workspace),
+    secrets.delete(CUSTOM_API_KEY_SECRET)
+  ]);
+  vscode5.window.showInformationMessage("Custom backend settings cleared.");
+}
+async function setBaseUrl(current) {
+  const value = await vscode5.window.showInputBox({
+    ignoreFocusOut: true,
+    prompt: "Backend base URL (e.g. https://gateway.example.com). A '/v1' suffix is optional.",
+    title: "Custom Backend Base URL",
+    validateInput: (v) => v.trim().startsWith("http") ? undefined : "Must be an http(s) URL",
+    value: current ?? ""
+  });
+  if (value === undefined)
+    return;
+  const target = await askScope();
+  if (target === undefined)
+    return;
+  await vscode5.workspace.getConfiguration("custom").update("baseUrl", value.trim() || undefined, target);
+  vscode5.window.showInformationMessage("Custom backend base URL saved.");
+}
+async function setModels(current) {
+  const value = await vscode5.window.showInputBox({
+    ignoreFocusOut: true,
+    prompt: "Comma-separated model IDs to expose. Leave empty to auto-discover via the backend's /v1/models endpoint.",
+    title: "Custom Backend Models",
+    value: current.join(", ")
+  });
+  if (value === undefined)
+    return;
+  const target = await askScope();
+  if (target === undefined)
+    return;
+  await vscode5.workspace.getConfiguration("custom").update("models", value.trim() || undefined, target);
+  vscode5.window.showInformationMessage("Custom backend model list saved.");
+}
+async function setToken(secrets) {
+  const value = await vscode5.window.showInputBox({
+    ignoreFocusOut: true,
+    password: true,
+    prompt: "Access token / API key for the backend",
+    title: "Custom Backend Access Token"
+  });
+  if (value === undefined)
+    return;
+  if (value.trim()) {
+    await secrets.store(CUSTOM_API_KEY_SECRET, value.trim());
+    vscode5.window.showInformationMessage("Custom backend access token saved.");
+  } else {
+    await secrets.delete(CUSTOM_API_KEY_SECRET);
+    vscode5.window.showInformationMessage("Custom backend access token cleared.");
+  }
+}
+async function testConnection(secrets) {
+  const settings = await getCustomBackendSettings(secrets);
+  const config = toBackendConfig(settings);
+  if (!config) {
+    vscode5.window.showErrorMessage("Cannot test: set a base URL and access token first.");
+    return;
+  }
+  await vscode5.window.withProgress({ location: vscode5.ProgressLocation.Notification, title: "Testing custom backend..." }, async () => {
+    try {
+      const client = new CustomBackendClient(config);
+      const models = await client.listModels();
+      vscode5.window.showInformationMessage(`Connection OK. Discovered ${models.length} model(s).`);
+    } catch (error) {
+      vscode5.window.showErrorMessage(`Connection failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+}
+async function toggleTls(current) {
+  const target = await askScope();
+  if (target === undefined)
+    return;
+  await vscode5.workspace.getConfiguration("custom").update("allowInsecureTls", !current, target);
+  vscode5.window.showInformationMessage(`Insecure TLS ${current ? "disabled" : "enabled"} for the custom backend.`);
+}
+
+// src/custom/provider.ts
+var vscode8 = __toESM(require("vscode"));
+
+// src/tokenizer.ts
+var import_tiktokenizer = __toESM(require_dist(), 1);
+var import_node_fs = require("node:fs");
+var import_node_path = require("node:path");
+var vscode6 = __toESM(require("vscode"));
+var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\src";
+var ENCODER = "o200k_base";
+var RANK_FILE_NAME = "o200k_base.tiktoken";
+var CACHE_SIZE = 5000;
+var TIKTOKENIZER_INTERNAL_CACHE = 64000;
+function findRankFile() {
+  const here = __dirname;
+  const candidates = [
+    import_node_path.join(here, RANK_FILE_NAME),
+    import_node_path.join(here, "tokenizer", RANK_FILE_NAME),
+    import_node_path.join(here, "..", "src", "tokenizer", RANK_FILE_NAME)
+  ];
+  for (const candidate of candidates) {
+    if (import_node_fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return;
+}
+var tokenizerInstance;
+var tokenizerInitFailed = false;
+function getTokenizer() {
+  if (tokenizerInstance !== undefined) {
+    return tokenizerInstance;
+  }
+  if (tokenizerInitFailed) {
+    return;
+  }
+  try {
+    const rankFile = findRankFile();
+    if (rankFile === undefined) {
+      tokenizerInitFailed = true;
+      logger.warn("[Tokenizer] Could not locate o200k_base.tiktoken; falling back to char-based estimation");
+      return;
+    }
+    tokenizerInstance = import_tiktokenizer.createTokenizer(rankFile, import_tiktokenizer.getSpecialTokensByEncoder(ENCODER), import_tiktokenizer.getRegexByEncoder(ENCODER), TIKTOKENIZER_INTERNAL_CACHE);
+    logger.debug("[Tokenizer] Initialized o200k_base tokenizer");
+    return tokenizerInstance;
+  } catch (error) {
+    tokenizerInitFailed = true;
+    logger.warn("[Tokenizer] Failed to initialize o200k_base tokenizer", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return;
+  }
+}
+var lengthCache = new Map;
+function countMessageTokens(message) {
+  let total = 0;
+  for (const part of message.content) {
+    if (part instanceof vscode6.LanguageModelTextPart) {
+      total += cachedTokenLength(part.value);
+      continue;
+    }
+    if (part instanceof vscode6.LanguageModelToolCallPart) {
+      const inputStr = JSON.stringify(part.input) ?? "";
+      total += cachedTokenLength(part.name) + cachedTokenLength(inputStr);
+      continue;
+    }
+    if (part instanceof vscode6.LanguageModelToolResultPart) {
+      for (const item of part.content) {
+        if (item instanceof vscode6.LanguageModelTextPart) {
+          total += cachedTokenLength(item.value);
+          continue;
+        }
+        try {
+          total += cachedTokenLength(JSON.stringify(item));
+        } catch {
+          total += 100;
+        }
+      }
+      continue;
+    }
+    if (typeof part === "object" && part !== null && "data" in part && "mimeType" in part) {
+      const dataPart = part;
+      total += dataPart.mimeType.startsWith("image/") ? Math.min(Math.ceil(dataPart.data.length / 50), 1600) : Math.ceil(dataPart.data.length / 4);
+    }
+  }
+  return total;
+}
+function countStringTokens(text) {
+  return cachedTokenLength(text);
+}
+function cachedTokenLength(text) {
+  if (text.length === 0) {
+    return 0;
+  }
+  const cached = lengthCache.get(text);
+  if (cached !== undefined) {
+    lengthCache.delete(text);
+    lengthCache.set(text, cached);
+    return cached;
+  }
+  const length = encodeOrEstimate(text);
+  if (lengthCache.size >= CACHE_SIZE) {
+    const oldestKey = lengthCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      lengthCache.delete(oldestKey);
+    }
+  }
+  lengthCache.set(text, length);
+  return length;
+}
+function encodeOrEstimate(text) {
+  const tokenizer = getTokenizer();
+  if (tokenizer === undefined) {
+    return Math.ceil(text.length / 3);
+  }
+  try {
+    return tokenizer.encode(text).length;
+  } catch (error) {
+    logger.warn("[Tokenizer] encode() failed; falling back to char-based estimate", {
+      error: error instanceof Error ? error.message : String(error),
+      textLength: text.length
+    });
+    return Math.ceil(text.length / 3);
+  }
+}
+
+// src/custom/converter.ts
+var import_node_util = require("node:util");
+var vscode7 = __toESM(require("vscode"));
+function convertMessages(messages) {
+  const result = [];
+  for (const msg of messages) {
+    switch (msg.role) {
+      case vscode7.LanguageModelChatMessageRole.Assistant: {
+        result.push(...convertAssistantMessage(msg));
+        break;
+      }
+      case vscode7.LanguageModelChatMessageRole.User: {
+        result.push(...convertUserMessage(msg));
+        break;
+      }
+      default: {
+        result.push({ content: extractText(msg), role: "system" });
+        break;
+      }
+    }
+  }
+  return result.filter((msg) => isNonEmptyMessage(msg));
+}
+function convertTools(tools) {
+  if (!tools || tools.length === 0) {
+    return;
+  }
+  return tools.map((tool) => ({
+    function: {
+      description: tool.description,
+      name: tool.name,
+      parameters: tool.inputSchema ?? { properties: {}, type: "object" }
+    },
+    type: "function"
+  }));
+}
+function convertAssistantMessage(msg) {
+  let text = "";
+  const toolCalls = [];
+  for (const part of msg.content) {
+    if (part instanceof vscode7.LanguageModelTextPart) {
+      text += part.value;
+    } else if (part instanceof vscode7.LanguageModelToolCallPart) {
+      toolCalls.push({
+        function: { arguments: JSON.stringify(part.input ?? {}), name: part.name },
+        id: part.callId,
+        type: "function"
+      });
+    }
+  }
+  const message = { content: text || null, role: "assistant" };
+  if (toolCalls.length > 0) {
+    message.tool_calls = toolCalls;
+  }
+  return [message];
+}
+function convertUserMessage(msg) {
+  const contentParts = [];
+  const toolMessages = [];
+  for (const part of msg.content) {
+    if (part instanceof vscode7.LanguageModelTextPart) {
+      if (part.value.trim()) {
+        contentParts.push({ text: part.value, type: "text" });
+      }
+    } else if (part instanceof vscode7.LanguageModelToolResultPart) {
+      toolMessages.push({
+        content: extractToolResultText(part.content),
+        role: "tool",
+        tool_call_id: part.callId
+      });
+    } else if (isDataPart(part)) {
+      const imagePart = toImagePart(part);
+      if (imagePart)
+        contentParts.push(imagePart);
+    }
+  }
+  const messages = [];
+  if (contentParts.length > 0) {
+    const onlyText = contentParts.length === 1 && contentParts[0].type === "text" ? contentParts[0].text : undefined;
+    messages.push({ content: onlyText ?? contentParts, role: "user" });
+  }
+  messages.push(...toolMessages);
+  return messages;
+}
+function extractText(msg) {
+  return msg.content.filter((p) => p instanceof vscode7.LanguageModelTextPart).map((p) => p.value).join("");
+}
+function extractToolResultText(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (item instanceof vscode7.LanguageModelTextPart) {
+        return item.value;
+      }
+      if (item && typeof item === "object" && "value" in item) {
+        return String(item.value);
+      }
+      return typeof item === "string" ? item : JSON.stringify(item);
+    }).join("");
+  }
+  if (content && typeof content === "object") {
+    return JSON.stringify(content);
+  }
+  return String(content ?? "");
+}
+function isDataPart(part) {
+  return !!part && typeof part === "object" && "data" in part && "mimeType" in part && part.data instanceof Uint8Array;
+}
+function isNonEmptyMessage(msg) {
+  if (msg.tool_calls && msg.tool_calls.length > 0) {
+    return true;
+  }
+  if (typeof msg.content === "string") {
+    return msg.role === "tool" || msg.content.length > 0;
+  }
+  return Array.isArray(msg.content) && msg.content.length > 0;
+}
+function toImagePart(part) {
+  try {
+    const mime = new import_node_util.MIMEType(part.mimeType);
+    if (mime.type !== "image") {
+      return;
+    }
+    const base64 = Buffer.from(part.data).toString("base64");
+    return {
+      image_url: { url: `data:${part.mimeType};base64,${base64}` },
+      type: "image_url"
+    };
+  } catch (error) {
+    logger.warn("[Custom Provider] Skipping image with invalid MIME type", {
+      error: error instanceof Error ? error.message : String(error),
+      mimeType: part.mimeType
+    });
+    return;
+  }
+}
+
+// src/custom/provider.ts
+var CUSTOM_MODEL_PICKER_CATEGORY = { label: "Custom Backend", order: 60 };
+var CUSTOM_ERROR_SENTINEL_ID = "__custom_error_sentinel__";
+var DEFAULT_MAX_INPUT_TOKENS = 128000;
+var DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
+class CustomChatModelProvider {
+  secrets;
+  _onDidChange = new vscode8.EventEmitter;
+  onDidChangeLanguageModelChatInformation = this._onDidChange.event;
+  client = new CustomBackendClient({ apiKey: "", baseUrl: "" });
+  constructor(secrets) {
+    this.secrets = secrets;
+  }
+  dispose() {
+    this._onDidChange.dispose();
+  }
+  notifyModelInformationChanged(reason) {
+    const suffix = reason ? `: ${reason}` : "";
+    logger.debug(`[Custom Provider] Signaling model info refresh${suffix}`);
+    this._onDidChange.fire();
+  }
+  async provideLanguageModelChatInformation(options, token) {
+    const settings = await getCustomBackendSettings(this.secrets);
+    const config = toBackendConfig(settings);
+    if (!config) {
+      if (!options.silent) {
+        vscode8.window.showInformationMessage("Custom backend is not configured. Run 'Manage Custom Model Provider' to set a base URL and access token.");
+      }
+      return this.buildSentinel("Backend not configured (missing base URL or access token)");
+    }
+    this.client.setConfig(config);
+    try {
+      const models = await this.resolveModels(settings, token);
+      if (models.length === 0) {
+        return this.buildSentinel("No models discovered and none configured manually");
+      }
+      return models;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return [];
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (!options.silent) {
+        vscode8.window.showErrorMessage(`Failed to load custom backend models: ${message}`);
+      }
+      logger.error("[Custom Provider] Failed to load models", error);
+      return this.buildSentinel(message);
+    }
+  }
+  async provideLanguageModelChatResponse(model, messages, options, progress, token) {
+    if (model.id === CUSTOM_ERROR_SENTINEL_ID) {
+      const reason = model.detail ?? "unknown error";
+      throw new Error(`Custom backend is unavailable: ${reason}. Run 'Manage Custom Model Provider', then re-open the model picker.`);
+    }
+    const settings = await getCustomBackendSettings(this.secrets);
+    const config = toBackendConfig(settings);
+    if (!config) {
+      throw new Error("Custom backend is not configured (missing base URL or access token).");
+    }
+    this.client.setConfig(config);
+    const abortController = new AbortController;
+    const cancellation = token.onCancellationRequested(() => abortController.abort());
+    try {
+      const request = {
+        messages: convertMessages(messages),
+        model: model.id,
+        stream: true
+      };
+      const tools = convertTools(options.tools);
+      if (tools) {
+        request.tools = tools;
+        request.tool_choice = mapToolChoice(options.toolMode);
+      }
+      if (typeof options.modelOptions?.max_tokens === "number") {
+        request.max_tokens = options.modelOptions.max_tokens;
+      }
+      if (typeof options.modelOptions?.temperature === "number") {
+        request.temperature = options.modelOptions.temperature;
+      }
+      await this.streamResponse(request, progress, abortController.signal);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        logger.info("[Custom Provider] Request cancelled by user");
+        return;
+      }
+      logger.error("[Custom Provider] Chat request failed", {
+        error: error instanceof Error ? error.message : String(error),
+        modelId: model.id,
+        status: error instanceof CustomBackendError ? error.status : undefined
+      });
+      throw error;
+    } finally {
+      cancellation.dispose();
+    }
+  }
+  async provideTokenCount(model, text, _token) {
+    if (model.id === CUSTOM_ERROR_SENTINEL_ID) {
+      return 0;
+    }
+    return typeof text === "string" ? countStringTokens(text) : countMessageTokens(text);
+  }
+  buildModelInfo(id, caps) {
+    return {
+      capabilities: {
+        imageInput: caps?.vision ?? false,
+        toolCalling: caps?.toolCalling ?? true
+      },
+      category: CUSTOM_MODEL_PICKER_CATEGORY,
+      family: "custom",
+      id,
+      isUserSelectable: true,
+      maxInputTokens: DEFAULT_MAX_INPUT_TOKENS,
+      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      name: id,
+      tooltip: `Custom backend model: ${id}`,
+      version: "1.0.0"
+    };
+  }
+  buildSentinel(detail) {
+    const sentinel = {
+      capabilities: { imageInput: false, toolCalling: false },
+      category: CUSTOM_MODEL_PICKER_CATEGORY,
+      detail,
+      family: "custom",
+      id: CUSTOM_ERROR_SENTINEL_ID,
+      isUserSelectable: true,
+      maxInputTokens: 1,
+      maxOutputTokens: 1,
+      name: "⚠ Custom backend unavailable",
+      tooltip: detail,
+      version: "1.0.0"
+    };
+    return [sentinel];
+  }
+  flushToolCalls(accumulators, progress) {
+    for (const acc of accumulators.values()) {
+      if (!acc.name)
+        continue;
+      let input;
+      try {
+        input = acc.args ? JSON.parse(acc.args) : {};
+      } catch (error) {
+        logger.warn("[Custom Provider] Failed to parse tool call arguments; sending empty input", {
+          error: error instanceof Error ? error.message : String(error),
+          name: acc.name
+        });
+        input = {};
+      }
+      progress.report(new vscode8.LanguageModelToolCallPart(acc.id || acc.name, acc.name, input));
+    }
+  }
+  async resolveModels(settings, token) {
+    const abortController = new AbortController;
+    const cancellation = token.onCancellationRequested(() => abortController.abort());
+    try {
+      if (settings.models.length > 0) {
+        return settings.models.map((id) => this.buildModelInfo(id));
+      }
+      const discovered = await this.client.listModels(abortController.signal);
+      return discovered.map((m) => this.buildModelInfo(m.id, { toolCalling: m.toolCalling, vision: m.vision }));
+    } finally {
+      cancellation.dispose();
+    }
+  }
+  async streamResponse(request, progress, signal) {
+    const toolAccumulators = new Map;
+    for await (const delta of this.client.streamChat(request, signal)) {
+      if (delta.content) {
+        progress.report(new vscode8.LanguageModelTextPart(delta.content));
+      }
+      if (delta.toolCalls) {
+        for (const tc of delta.toolCalls) {
+          const acc = toolAccumulators.get(tc.index) ?? { args: "", id: "", name: "" };
+          if (tc.id)
+            acc.id = tc.id;
+          if (tc.name)
+            acc.name = tc.name;
+          if (tc.argumentsFragment)
+            acc.args += tc.argumentsFragment;
+          toolAccumulators.set(tc.index, acc);
+        }
+      }
+    }
+    this.flushToolCalls(toolAccumulators, progress);
+  }
+}
+function mapToolChoice(mode) {
+  return mode === vscode8.LanguageModelChatToolMode.Required ? "required" : "auto";
+}
+
 // src/provider.ts
 var import_client_bedrock2 = __toESM(require_dist_cjs74(), 1);
-var import_node_util2 = require("node:util");
-var vscode7 = __toESM(require("vscode"));
+var import_node_util3 = require("node:util");
+var vscode11 = __toESM(require("vscode"));
 
 // src/aws-partition.ts
 function getPartitionFromRegion(region) {
@@ -54607,8 +55529,8 @@ function createBearerTokenSigner(apiKey) {
 
 // src/converters/messages.ts
 var import_client_bedrock_runtime2 = __toESM(require_dist_cjs89(), 1);
-var import_node_util = require("node:util");
-var vscode4 = __toESM(require("vscode"));
+var import_node_util2 = require("node:util");
+var vscode9 = __toESM(require("vscode"));
 
 // src/profiles.ts
 function getModelProfile(modelId) {
@@ -54797,7 +55719,7 @@ function supports1MContext(modelId) {
 }
 
 // src/converters/messages.ts
-function convertMessages(messages, modelId, options) {
+function convertMessages2(messages, modelId, options) {
   const profile = getModelProfile(modelId);
   const bedrockMessages = [];
   const systemMessages = [];
@@ -54809,10 +55731,10 @@ function convertMessages(messages, modelId, options) {
     lastThinkingBlockTextLength: options?.lastThinkingBlock?.text.length
   });
   for (const msg of messages) {
-    if (msg.role === vscode4.LanguageModelChatMessageRole.User) {
+    if (msg.role === vscode9.LanguageModelChatMessageRole.User) {
       const { content, hasToolResults } = processUserMessageParts(msg, profile);
       mergeOrAppendMessage(bedrockMessages, content, import_client_bedrock_runtime2.ConversationRole.USER, hasToolResults, userMessageIndicesWithToolResults);
-    } else if (msg.role === vscode4.LanguageModelChatMessageRole.Assistant) {
+    } else if (msg.role === vscode9.LanguageModelChatMessageRole.Assistant) {
       const content = processAssistantMessageParts(msg);
       mergeOrAppendMessage(bedrockMessages, content, import_client_bedrock_runtime2.ConversationRole.ASSISTANT, false, userMessageIndicesWithToolResults);
     } else {
@@ -54864,11 +55786,11 @@ function detectToolResultError(textContent) {
   const lowerContent = textContent.toLowerCase();
   return lowerContent.startsWith("error") || lowerContent.startsWith("error while calling tool:") || lowerContent.includes("error while calling tool:") || lowerContent.includes("invalid terminal id") || lowerContent.includes("please check your input");
 }
-function extractToolResultText(content) {
+function extractToolResultText2(content) {
   let textContent = "";
   if (Array.isArray(content)) {
     for (const item of content) {
-      if (item instanceof vscode4.LanguageModelTextPart) {
+      if (item instanceof vscode9.LanguageModelTextPart) {
         textContent += item.value;
       } else if (typeof item === "string") {
         textContent += item;
@@ -54877,7 +55799,7 @@ function extractToolResultText(content) {
           mimeType: item.mimeType
         });
       } else {
-        textContent += import_node_util.inspect(item, { depth: 4 });
+        textContent += import_node_util2.inspect(item, { depth: 4 });
       }
     }
   } else if (typeof content === "string") {
@@ -54887,7 +55809,7 @@ function extractToolResultText(content) {
       mimeType: content.mimeType
     });
   } else {
-    textContent = import_node_util.inspect(content);
+    textContent = import_node_util2.inspect(content);
   }
   return textContent;
 }
@@ -54964,9 +55886,9 @@ function injectExtendedThinking(bedrockMessages, thinkingBlock) {
   });
 }
 function isImageDataPart(part) {
-  if (typeof part === "object" && part != null && "mimeType" in part && typeof part.mimeType === "string" && "data" in part && import_node_util.types.isUint8Array(part.data)) {
+  if (typeof part === "object" && part != null && "mimeType" in part && typeof part.mimeType === "string" && "data" in part && import_node_util2.types.isUint8Array(part.data)) {
     try {
-      const mime = new import_node_util.MIMEType(part.mimeType);
+      const mime = new import_node_util2.MIMEType(part.mimeType);
       return mime.type === "image";
     } catch {
       return false;
@@ -54982,7 +55904,7 @@ function isMetadataPart(item) {
   if (typeof item.mimeType !== "string")
     return false;
   try {
-    const mime = new import_node_util.MIMEType(item.mimeType);
+    const mime = new import_node_util2.MIMEType(item.mimeType);
     return !mime.type || !mime.subtype;
   } catch {
     return true;
@@ -55011,7 +55933,7 @@ function mergeOrAppendMessage(messages, content, role, hasToolResults, userMessa
 function processAssistantMessageParts(msg) {
   const content = [];
   for (const part of msg.content) {
-    if (part instanceof vscode4.LanguageModelTextPart) {
+    if (part instanceof vscode9.LanguageModelTextPart) {
       const block = processTextPart(part);
       if (block)
         content.push(block);
@@ -55019,7 +55941,7 @@ function processAssistantMessageParts(msg) {
       const block = processImagePart(part, import_client_bedrock_runtime2.ConversationRole.ASSISTANT);
       if (block)
         content.push(block);
-    } else if (part instanceof vscode4.LanguageModelToolCallPart) {
+    } else if (part instanceof vscode9.LanguageModelToolCallPart) {
       content.push(processToolCallPart(part));
     } else if (isMetadataPart(part)) {
       logger.trace("[Message Converter] Skipping metadata part in assistant message:", {
@@ -55031,7 +55953,7 @@ function processAssistantMessageParts(msg) {
 }
 function processImagePart(part, role) {
   try {
-    const mime = new import_node_util.MIMEType(part.mimeType);
+    const mime = new import_node_util2.MIMEType(part.mimeType);
     if (mime.type === "image") {
       const format = mime.subtype.toLowerCase();
       if (format === "png" || format === "jpeg" || format === "gif" || format === "webp") {
@@ -55050,7 +55972,7 @@ function processImagePart(part, role) {
     }
   } catch (error) {
     logger.warn(`[Message Converter] Invalid MIME type in ${role} message`, {
-      error: error instanceof Error ? error.message : import_node_util.inspect(error),
+      error: error instanceof Error ? error.message : import_node_util2.inspect(error),
       mimeType: part.mimeType
     });
   }
@@ -55059,7 +55981,7 @@ function processImagePart(part, role) {
 function processSystemMessageParts(msg) {
   const systemBlocks = [];
   for (const part of msg.content) {
-    if (part instanceof vscode4.LanguageModelTextPart && part.value.trim()) {
+    if (part instanceof vscode9.LanguageModelTextPart && part.value.trim()) {
       systemBlocks.push({ text: part.value });
     } else if (isMetadataPart(part)) {
       logger.trace("[Message Converter] Skipping metadata part in system message:", {
@@ -55085,7 +56007,7 @@ function processToolCallPart(part) {
   };
 }
 function processToolResultPart(part, profile) {
-  const textContent = extractToolResultText(part.content);
+  const textContent = extractToolResultText2(part.content);
   logger.debug("[Message Converter] Processing VSCode tool result:", {
     callId: part.callId,
     contentType: typeof part.content,
@@ -55125,7 +56047,7 @@ function processUserMessageParts(msg, profile) {
   const content = [];
   let hasToolResults = false;
   for (const part of msg.content) {
-    if (part instanceof vscode4.LanguageModelTextPart) {
+    if (part instanceof vscode9.LanguageModelTextPart) {
       const block = processTextPart(part);
       if (block)
         content.push(block);
@@ -55133,7 +56055,7 @@ function processUserMessageParts(msg, profile) {
       const block = processImagePart(part, import_client_bedrock_runtime2.ConversationRole.USER);
       if (block)
         content.push(block);
-    } else if (part instanceof vscode4.LanguageModelToolResultPart) {
+    } else if (part instanceof vscode9.LanguageModelToolResultPart) {
       hasToolResults = true;
       content.push(processToolResultPart(part, profile));
     } else if (isMetadataPart(part)) {
@@ -55161,7 +56083,7 @@ function convertSchema(schema) {
 }
 
 // src/converters/tools.ts
-function convertTools(options, modelId, extendedThinkingEnabled, promptCachingEnabled) {
+function convertTools2(options, modelId, extendedThinkingEnabled, promptCachingEnabled) {
   if (!options.tools || options.tools.length === 0) {
     return;
   }
@@ -55198,7 +56120,7 @@ function convertTools(options, modelId, extendedThinkingEnabled, promptCachingEn
 
 // src/stream-processor.ts
 var import_client_bedrock_runtime4 = __toESM(require_dist_cjs89(), 1);
-var vscode5 = __toESM(require("vscode"));
+var vscode10 = __toESM(require("vscode"));
 
 // src/tool-buffer.ts
 class ToolBuffer {
@@ -55299,12 +56221,12 @@ class StreamProcessor {
       }
       if (!state.hasEmittedContent && !state.hasEmittedThinking && state.capturedThinkingBlock?.text && !token.isCancellationRequested && state.stopReason === import_client_bedrock_runtime4.StopReason.END_TURN) {
         logger.warn("[Stream Processor] Thinking captured but not emitted to UI (LanguageModelThinkingPart unavailable)");
-        progress.report(new vscode5.LanguageModelTextPart("*(The model produced only internal reasoning, but the thinking display is not supported in this environment. Please try again or rephrase your request.)*"));
+        progress.report(new vscode10.LanguageModelTextPart("*(The model produced only internal reasoning, but the thinking display is not supported in this environment. Please try again or rephrase your request.)*"));
         state.hasEmittedContent = true;
       }
       if (!state.hasEmittedContent && !state.hasEmittedThinking && !state.capturedThinkingBlock?.text && !token.isCancellationRequested && state.stopReason === import_client_bedrock_runtime4.StopReason.END_TURN) {
         logger.warn("[Stream Processor] Model returned empty response with stop reason:", state.stopReason);
-        progress.report(new vscode5.LanguageModelTextPart("*(The model returned an empty response. Please try again or rephrase your request.)*"));
+        progress.report(new vscode10.LanguageModelTextPart("*(The model returned an empty response. Please try again or rephrase your request.)*"));
         state.hasEmittedContent = true;
       }
       this.logCompletion(state);
@@ -55355,7 +56277,7 @@ class StreamProcessor {
       input: tool.input,
       name: tool.name
     });
-    progress.report(new vscode5.LanguageModelToolCallPart(tool.id, tool.name, tool.input));
+    progress.report(new vscode10.LanguageModelToolCallPart(tool.id, tool.name, tool.input));
     state.toolBuffer.markEmitted(stop.contentBlockIndex);
     state.hasEmittedContent = true;
   }
@@ -55424,7 +56346,7 @@ class StreamProcessor {
       state.capturedThinkingBlock ??= { text: "" };
       state.capturedThinkingBlock.text += reasoningText;
       try {
-        const ThinkingPart = vscode5.LanguageModelThinkingPart;
+        const ThinkingPart = vscode10.LanguageModelThinkingPart;
         if (typeof ThinkingPart === "function") {
           const Ctor = ThinkingPart;
           progress.report(new Ctor(reasoningText));
@@ -55453,7 +56375,7 @@ class StreamProcessor {
     if (typeof text === "string" && text) {
       state.textChunkCount++;
       logger.trace("[Stream Processor] Text delta received, length:", text.length);
-      progress.report(new vscode5.LanguageModelTextPart(text));
+      progress.report(new vscode10.LanguageModelTextPart(text));
       state.hasEmittedContent = true;
     } else if (text !== undefined && typeof text !== "string") {
       logger.warn("[Stream Processor] Received non-string text delta, skipping:", typeof text);
@@ -55520,7 +56442,7 @@ class StreamProcessor {
       input: validTool.input,
       name: validTool.name
     });
-    progress.report(new vscode5.LanguageModelToolCallPart(validTool.id, validTool.name, validTool.input));
+    progress.report(new vscode10.LanguageModelToolCallPart(validTool.id, validTool.name, validTool.input));
     state.toolBuffer.markEmitted(contentBlockIndex);
     state.hasEmittedContent = true;
   }
@@ -55614,130 +56536,6 @@ function hasBlockedGuardrail(guardrailData) {
   return false;
 }
 
-// src/tokenizer.ts
-var import_tiktokenizer = __toESM(require_dist(), 1);
-var import_node_fs = require("node:fs");
-var import_node_path = require("node:path");
-var vscode6 = __toESM(require("vscode"));
-var __dirname = "C:\\Users\\paulzhu\\Projects\\amazon-bedrock-copilot-chat\\src";
-var ENCODER = "o200k_base";
-var RANK_FILE_NAME = "o200k_base.tiktoken";
-var CACHE_SIZE = 5000;
-var TIKTOKENIZER_INTERNAL_CACHE = 64000;
-function findRankFile() {
-  const here = __dirname;
-  const candidates = [
-    import_node_path.join(here, RANK_FILE_NAME),
-    import_node_path.join(here, "tokenizer", RANK_FILE_NAME),
-    import_node_path.join(here, "..", "src", "tokenizer", RANK_FILE_NAME)
-  ];
-  for (const candidate of candidates) {
-    if (import_node_fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return;
-}
-var tokenizerInstance;
-var tokenizerInitFailed = false;
-function getTokenizer() {
-  if (tokenizerInstance !== undefined) {
-    return tokenizerInstance;
-  }
-  if (tokenizerInitFailed) {
-    return;
-  }
-  try {
-    const rankFile = findRankFile();
-    if (rankFile === undefined) {
-      tokenizerInitFailed = true;
-      logger.warn("[Tokenizer] Could not locate o200k_base.tiktoken; falling back to char-based estimation");
-      return;
-    }
-    tokenizerInstance = import_tiktokenizer.createTokenizer(rankFile, import_tiktokenizer.getSpecialTokensByEncoder(ENCODER), import_tiktokenizer.getRegexByEncoder(ENCODER), TIKTOKENIZER_INTERNAL_CACHE);
-    logger.debug("[Tokenizer] Initialized o200k_base tokenizer");
-    return tokenizerInstance;
-  } catch (error) {
-    tokenizerInitFailed = true;
-    logger.warn("[Tokenizer] Failed to initialize o200k_base tokenizer", {
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return;
-  }
-}
-var lengthCache = new Map;
-function countMessageTokens(message) {
-  let total = 0;
-  for (const part of message.content) {
-    if (part instanceof vscode6.LanguageModelTextPart) {
-      total += cachedTokenLength(part.value);
-      continue;
-    }
-    if (part instanceof vscode6.LanguageModelToolCallPart) {
-      const inputStr = JSON.stringify(part.input) ?? "";
-      total += cachedTokenLength(part.name) + cachedTokenLength(inputStr);
-      continue;
-    }
-    if (part instanceof vscode6.LanguageModelToolResultPart) {
-      for (const item of part.content) {
-        if (item instanceof vscode6.LanguageModelTextPart) {
-          total += cachedTokenLength(item.value);
-          continue;
-        }
-        try {
-          total += cachedTokenLength(JSON.stringify(item));
-        } catch {
-          total += 100;
-        }
-      }
-      continue;
-    }
-    if (typeof part === "object" && part !== null && "data" in part && "mimeType" in part) {
-      const dataPart = part;
-      total += dataPart.mimeType.startsWith("image/") ? Math.min(Math.ceil(dataPart.data.length / 50), 1600) : Math.ceil(dataPart.data.length / 4);
-    }
-  }
-  return total;
-}
-function countStringTokens(text) {
-  return cachedTokenLength(text);
-}
-function cachedTokenLength(text) {
-  if (text.length === 0) {
-    return 0;
-  }
-  const cached = lengthCache.get(text);
-  if (cached !== undefined) {
-    lengthCache.delete(text);
-    lengthCache.set(text, cached);
-    return cached;
-  }
-  const length = encodeOrEstimate(text);
-  if (lengthCache.size >= CACHE_SIZE) {
-    const oldestKey = lengthCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      lengthCache.delete(oldestKey);
-    }
-  }
-  lengthCache.set(text, length);
-  return length;
-}
-function encodeOrEstimate(text) {
-  const tokenizer = getTokenizer();
-  if (tokenizer === undefined) {
-    return Math.ceil(text.length / 3);
-  }
-  try {
-    return tokenizer.encode(text).length;
-  } catch (error) {
-    logger.warn("[Tokenizer] encode() failed; falling back to char-based estimate", {
-      error: error instanceof Error ? error.message : String(error),
-      textLength: text.length
-    });
-    return Math.ceil(text.length / 3);
-  }
-}
-
 // src/validation.ts
 var import_client_bedrock_runtime5 = __toESM(require_dist_cjs89(), 1);
 function validateBedrockMessages(messages) {
@@ -55773,7 +56571,7 @@ class BedrockChatModelProvider {
   static CONTEXT_SELECTION_MIGRATION_KEY = "bedrock.contextSelection.clearedStale1M";
   static CONTEXT_SELECTION_STATE_KEY = "bedrock.contextSelection.byModel";
   static MODEL_CHANGE_ECHO_WINDOW_MS = 5000;
-  _onDidChangeLanguageModelInformation = new vscode7.EventEmitter;
+  _onDidChangeLanguageModelInformation = new vscode11.EventEmitter;
   onDidChangeLanguageModelChatInformation = this._onDidChangeLanguageModelInformation.event;
   chatEndpoints = [];
   client;
@@ -55815,10 +56613,10 @@ class BedrockChatModelProvider {
     await this.migrateStaleContextSelections();
     const hasRunBefore = this.globalState.get("bedrock.hasRunBefore", false);
     if (!hasRunBefore && !options.silent) {
-      const action = await vscode7.window.showInformationMessage("Amazon Bedrock integration requires AWS credentials. Would you like to configure your AWS profile and region first?", "Configure Settings", "Use Default Credentials");
+      const action = await vscode11.window.showInformationMessage("Amazon Bedrock integration requires AWS credentials. Would you like to configure your AWS profile and region first?", "Configure Settings", "Use Default Credentials");
       await this.globalState.update("bedrock.hasRunBefore", true);
       if (action === "Configure Settings") {
-        await vscode7.commands.executeCommand("bedrock.manage");
+        await vscode11.commands.executeCommand("bedrock.manage");
         return [];
       } else if (action !== "Use Default Credentials") {
         return [];
@@ -55827,7 +56625,7 @@ class BedrockChatModelProvider {
     const authConfig = await this.getAuthConfig(options.silent);
     if (!authConfig) {
       if (!options.silent) {
-        vscode7.window.showErrorMessage("AWS Bedrock authentication not configured. Please run 'Manage Amazon Bedrock Provider'.");
+        vscode11.window.showErrorMessage("AWS Bedrock authentication not configured. Please run 'Manage Amazon Bedrock Provider'.");
       }
       return this.buildSentinelModelList(new Error("AWS Bedrock authentication not configured"));
     }
@@ -55981,9 +56779,9 @@ class BedrockChatModelProvider {
         if (options.silent) {
           return await fetchModels();
         }
-        return await vscode7.window.withProgress({
+        return await vscode11.window.withProgress({
           cancellable: true,
-          location: vscode7.ProgressLocation.Notification,
+          location: vscode11.ProgressLocation.Notification,
           title: "Loading Bedrock models"
         }, fetchModels);
       } finally {
@@ -55997,7 +56795,7 @@ class BedrockChatModelProvider {
       if (!options.silent) {
         logger.error("[Bedrock Model Provider] Failed to fetch models", error);
         if (error instanceof ListFoundationModelsDeniedError) {
-          const manualModelId = await vscode7.window.showInputBox({
+          const manualModelId = await vscode11.window.showInputBox({
             placeHolder: "global.anthropic.claude-sonnet-4-6",
             prompt: "Model listing is blocked by AWS permissions. Enter a Bedrock model ID or inference profile ID to use."
           });
@@ -56013,10 +56811,10 @@ class BedrockChatModelProvider {
               return [manualInfo];
             }
           }
-          vscode7.window.showErrorMessage("Could not detect any Bedrock models with current permissions. Please update your AWS policy or provide a reachable model ID.");
+          vscode11.window.showErrorMessage("Could not detect any Bedrock models with current permissions. Please update your AWS policy or provide a reachable model ID.");
           return this.buildSentinelModelList(error);
         } else if (error instanceof NoAccessibleModelsError) {
-          const manualModelId = await vscode7.window.showInputBox({
+          const manualModelId = await vscode11.window.showInputBox({
             placeHolder: "global.anthropic.claude-sonnet-4-6",
             prompt: "No accessible Bedrock models were detected. Enter a Bedrock model ID or inference profile ID to use."
           });
@@ -56032,10 +56830,10 @@ class BedrockChatModelProvider {
               return [manualInfo];
             }
           }
-          vscode7.window.showErrorMessage("Could not detect any accessible Bedrock models. Please update your AWS policy or provide a reachable model ID.");
+          vscode11.window.showErrorMessage("Could not detect any accessible Bedrock models. Please update your AWS policy or provide a reachable model ID.");
           return this.buildSentinelModelList(error);
         } else {
-          vscode7.window.showErrorMessage(`Failed to fetch Bedrock models. Please check your AWS profile and region settings. Error: ${error instanceof Error ? error.message : String(error)}`);
+          vscode11.window.showErrorMessage(`Failed to fetch Bedrock models. Please check your AWS profile and region settings. Error: ${error instanceof Error ? error.message : String(error)}`);
           return this.buildSentinelModelList(error);
         }
       }
@@ -56103,7 +56901,7 @@ class BedrockChatModelProvider {
       const { budgetTokens, extendedThinkingEnabled: initialThinkingEnabled } = this.calculateThinkingConfig(modelProfile, modelLimits, maxTokensForRequest, settings.thinking.enabled);
       let extendedThinkingEnabled = initialThinkingEnabled;
       if (extendedThinkingEnabled) {
-        const assistantMsgCount = messages.filter((m) => m.role === vscode7.LanguageModelChatMessageRole.Assistant).length;
+        const assistantMsgCount = messages.filter((m) => m.role === vscode11.LanguageModelChatMessageRole.Assistant).length;
         if (assistantMsgCount > 1) {
           logger.debug("[Bedrock Model Provider] Disabling extended thinking - multiple assistant messages in history require individual thinking blocks", { assistantMsgCount });
           extendedThinkingEnabled = false;
@@ -56113,14 +56911,14 @@ class BedrockChatModelProvider {
           extendedThinkingEnabled = false;
         }
       }
-      const converted = convertMessages(messages, baseModelId, {
+      const converted = convertMessages2(messages, baseModelId, {
         extendedThinkingEnabled,
         lastThinkingBlock: this.lastThinkingBlock,
         promptCachingEnabled: settings.promptCaching.enabled
       });
       this.logConvertedMessages(converted.messages);
       validateBedrockMessages(converted.messages);
-      const toolConfig = convertTools(options, baseModelId, extendedThinkingEnabled, settings.promptCaching.enabled);
+      const toolConfig = convertTools2(options, baseModelId, extendedThinkingEnabled, settings.promptCaching.enabled);
       if (options.tools && options.tools.length > 128) {
         throw new Error("Cannot have more than 128 tools per request.");
       }
@@ -56154,7 +56952,7 @@ class BedrockChatModelProvider {
         if (awsError.$metadata) {
           errorDetails.awsMetadata = awsError.$metadata;
         }
-        errorDetails.fullErrorWithFormat = import_node_util2.inspect(error, {
+        errorDetails.fullErrorWithFormat = import_node_util3.inspect(error, {
           depth: 10,
           getters: true,
           maxArrayLength: 100,
@@ -56195,7 +56993,7 @@ class BedrockChatModelProvider {
           return estimateTokens(text);
         }
         const settings = await getBedrockSettings(this.globalState);
-        const converted = convertMessages([text], baseModelId, {
+        const converted = convertMessages2([text], baseModelId, {
           extendedThinkingEnabled: false,
           lastThinkingBlock: undefined,
           promptCachingEnabled: settings.promptCaching.enabled
@@ -56649,7 +57447,7 @@ class BedrockChatModelProvider {
     if (method === "api-key") {
       let apiKey = await this.secrets.get("bedrock.apiKey");
       if (!apiKey && !silent) {
-        const entered = await vscode7.window.showInputBox({
+        const entered = await vscode11.window.showInputBox({
           ignoreFocusOut: true,
           password: true,
           prompt: "Enter your AWS Bedrock API key",
@@ -56675,7 +57473,7 @@ class BedrockChatModelProvider {
       const sessionToken = await this.secrets.get("bedrock.sessionToken");
       if (!accessKeyId || !secretAccessKey) {
         if (!silent) {
-          vscode7.window.showErrorMessage("AWS access keys not configured. Please run 'Manage Amazon Bedrock Provider'.");
+          vscode11.window.showErrorMessage("AWS access keys not configured. Please run 'Manage Amazon Bedrock Provider'.");
         }
         return;
       }
@@ -56725,13 +57523,13 @@ class BedrockChatModelProvider {
     logger.trace("[Bedrock Model Provider] Full VSCode messages for reproduction:", {
       messages: messages.map((msg) => ({
         content: msg.content.map((part) => {
-          if (part instanceof vscode7.LanguageModelTextPart) {
+          if (part instanceof vscode11.LanguageModelTextPart) {
             return { type: "text", value: part.value };
           }
-          if (part instanceof vscode7.LanguageModelToolCallPart) {
+          if (part instanceof vscode11.LanguageModelToolCallPart) {
             return { callId: part.callId, input: part.input, name: part.name, type: "toolCall" };
           }
-          if (part instanceof vscode7.LanguageModelToolResultPart) {
+          if (part instanceof vscode11.LanguageModelToolResultPart) {
             return { callId: part.callId, content: part.content, type: "toolResult" };
           }
           if (typeof part === "object" && part != null && "mimeType" in part && "data" in part) {
@@ -56749,18 +57547,18 @@ class BedrockChatModelProvider {
     });
     for (const [idx, msg] of messages.entries()) {
       const partTypes = msg.content.map((p) => {
-        if (p instanceof vscode7.LanguageModelTextPart)
+        if (p instanceof vscode11.LanguageModelTextPart)
           return "text";
-        if (p instanceof vscode7.LanguageModelToolCallPart) {
+        if (p instanceof vscode11.LanguageModelToolCallPart) {
           return `toolCall(${p.name})`;
         }
-        if (p instanceof vscode7.LanguageModelToolResultPart) {
+        if (p instanceof vscode11.LanguageModelToolResultPart) {
           return `toolResult(${p.callId})`;
         }
         if (typeof p === "object" && p != null && "mimeType" in p) {
           try {
             const dataPart = p;
-            const mime = new import_node_util2.MIMEType(dataPart.mimeType);
+            const mime = new import_node_util3.MIMEType(dataPart.mimeType);
             if (mime.type === "image") {
               return `image(${mime.essence})`;
             }
@@ -56771,7 +57569,7 @@ class BedrockChatModelProvider {
       });
       logger.debug(`[Bedrock Model Provider] Message ${idx} (${msg.role}):`, partTypes);
       for (const part of msg.content) {
-        if (part instanceof vscode7.LanguageModelToolResultPart) {
+        if (part instanceof vscode11.LanguageModelToolResultPart) {
           let contentPreview = "[Unable to preview]";
           try {
             const contentStr = typeof part.content === "string" ? part.content : JSON.stringify(part.content);
@@ -56899,7 +57697,7 @@ class BedrockChatModelProvider {
             },
             total_tokens: promptTokens + result.usage.outputTokens
           };
-          trackingProgress.report(vscode7.LanguageModelDataPart.json(apiUsage, "usage"));
+          trackingProgress.report(vscode11.LanguageModelDataPart.json(apiUsage, "usage"));
         } catch (error) {
           logger.debug("[Bedrock Model Provider] Failed to report usage data part", {
             error: error instanceof Error ? error.message : String(error)
@@ -57023,7 +57821,7 @@ function isContextWindowOverflowError(error) {
   if (!error) {
     return false;
   }
-  const errorMessage = error instanceof Error ? error.message : import_node_util2.inspect(error);
+  const errorMessage = error instanceof Error ? error.message : import_node_util3.inspect(error);
   return CONTEXT_WINDOW_OVERFLOW_MESSAGES.some((msg) => errorMessage.includes(msg));
 }
 function makeBedrockErrorSentinel(error) {
@@ -57047,15 +57845,25 @@ function makeBedrockErrorSentinel(error) {
 
 // src/extension.ts
 function activate(context) {
-  const outputChannel = vscode8.window.createOutputChannel("Amazon Bedrock Models", { log: true });
+  const outputChannel = vscode12.window.createOutputChannel("Amazon Bedrock Models", { log: true });
   logger.initialize(outputChannel, context.extensionMode);
   logger.info("Amazon Bedrock extension activated. For verbose debugging, set log level to Debug via the output channel dropdown menu.");
   const provider = new BedrockChatModelProvider(context.secrets, context.globalState);
-  const providerDisposable = vscode8.lm.registerLanguageModelChatProvider("bedrock", provider);
-  const manageCmdDisposable = vscode8.commands.registerCommand("bedrock.manage", async () => {
+  const providerDisposable = vscode12.lm.registerLanguageModelChatProvider("bedrock", provider);
+  const manageCmdDisposable = vscode12.commands.registerCommand("bedrock.manage", async () => {
     await manageSettings(context.secrets, context.globalState);
   });
-  const cfgDisposable = vscode8.workspace.onDidChangeConfiguration((e) => {
+  const customProvider = new CustomChatModelProvider(context.secrets);
+  const customProviderDisposable = vscode12.lm.registerLanguageModelChatProvider("custom", customProvider);
+  const customManageCmdDisposable = vscode12.commands.registerCommand("custom.manage", async () => {
+    await manageCustomSettings(context.secrets);
+  });
+  const customCfgDisposable = vscode12.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("custom.baseUrl") || e.affectsConfiguration("custom.models") || e.affectsConfiguration("custom.allowInsecureTls")) {
+      customProvider.notifyModelInformationChanged("configuration changed");
+    }
+  });
+  const cfgDisposable = vscode12.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration("bedrock.region") || e.affectsConfiguration("bedrock.profile") || e.affectsConfiguration("bedrock.preferredModel") || e.affectsConfiguration("bedrock.inferenceProfiles.preferRegional") || e.affectsConfiguration("bedrock.promptCaching.enabled") || e.affectsConfiguration("bedrock.thinking.enabled") || e.affectsConfiguration("bedrock.thinking.budgetTokens") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.enabled") || e.affectsConfiguration("github.copilot.chat.anthropic.thinking.maxTokens")) {
       provider.notifyModelInformationChanged("configuration changed");
     }
@@ -57067,17 +57875,18 @@ function activate(context) {
     }
     secretsRefreshHandle = setTimeout(() => {
       provider.notifyModelInformationChanged("secrets changed (debounced)");
+      customProvider.notifyModelInformationChanged("secrets changed (debounced)");
       secretsRefreshHandle = undefined;
     }, 400);
   });
-  const secretsDebounceDisposable = new vscode8.Disposable(() => {
+  const secretsDebounceDisposable = new vscode12.Disposable(() => {
     if (secretsRefreshHandle) {
       clearTimeout(secretsRefreshHandle);
       secretsRefreshHandle = undefined;
     }
   });
   let lmRefreshHandle;
-  const lmDisposable = vscode8.lm.onDidChangeChatModels(() => {
+  const lmDisposable = vscode12.lm.onDidChangeChatModels(() => {
     if (!provider.isInitialFetchComplete()) {
       logger.debug("[Extension] Ignoring onDidChangeChatModels before initial fetch complete");
       return;
@@ -57094,17 +57903,17 @@ function activate(context) {
       lmRefreshHandle = undefined;
     }, 500);
   });
-  const lmDebounceDisposable = new vscode8.Disposable(() => {
+  const lmDebounceDisposable = new vscode12.Disposable(() => {
     if (lmRefreshHandle) {
       clearTimeout(lmRefreshHandle);
       lmRefreshHandle = undefined;
     }
   });
-  context.subscriptions.push(outputChannel, provider, providerDisposable, manageCmdDisposable, cfgDisposable, secretsDisposable, secretsDebounceDisposable, lmDisposable, lmDebounceDisposable);
+  context.subscriptions.push(outputChannel, provider, providerDisposable, manageCmdDisposable, cfgDisposable, secretsDisposable, secretsDebounceDisposable, lmDisposable, lmDebounceDisposable, customProvider, customProviderDisposable, customManageCmdDisposable, customCfgDisposable);
 }
 function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=922A3716BA9EB96864756E2164756E21
+//# debugId=2AE622301F045E9364756E2164756E21
 //# sourceMappingURL=extension.js.map
