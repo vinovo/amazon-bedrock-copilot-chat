@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 
 import { manageSettings } from "./commands/manage-settings";
+import { manageCustomSettings } from "./custom/manage-settings";
+import { CustomChatModelProvider } from "./custom/provider";
 import { logger } from "./logger";
 import { BedrockChatModelProvider } from "./provider";
 
@@ -18,6 +20,25 @@ export function activate(context: vscode.ExtensionContext) {
   const providerDisposable = vscode.lm.registerLanguageModelChatProvider("bedrock", provider);
   const manageCmdDisposable = vscode.commands.registerCommand("bedrock.manage", async () => {
     await manageSettings(context.secrets, context.globalState);
+  });
+
+  // Generic OpenAI-compatible backend provider (base URL + access token).
+  const customProvider = new CustomChatModelProvider(context.secrets);
+  const customProviderDisposable = vscode.lm.registerLanguageModelChatProvider(
+    "custom",
+    customProvider,
+  );
+  const customManageCmdDisposable = vscode.commands.registerCommand("custom.manage", async () => {
+    await manageCustomSettings(context.secrets);
+  });
+  const customCfgDisposable = vscode.workspace.onDidChangeConfiguration((e) => {
+    if (
+      e.affectsConfiguration("custom.baseUrl") ||
+      e.affectsConfiguration("custom.models") ||
+      e.affectsConfiguration("custom.allowInsecureTls")
+    ) {
+      customProvider.notifyModelInformationChanged("configuration changed");
+    }
   });
 
   // Refresh provider model list when relevant things change so UI updates immediately
@@ -47,6 +68,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
     secretsRefreshHandle = setTimeout(() => {
       provider.notifyModelInformationChanged("secrets changed (debounced)");
+      customProvider.notifyModelInformationChanged("secrets changed (debounced)");
       secretsRefreshHandle = undefined;
     }, 400);
   });
@@ -113,6 +135,10 @@ export function activate(context: vscode.ExtensionContext) {
     secretsDebounceDisposable,
     lmDisposable,
     lmDebounceDisposable,
+    customProvider,
+    customProviderDisposable,
+    customManageCmdDisposable,
+    customCfgDisposable,
   );
 }
 

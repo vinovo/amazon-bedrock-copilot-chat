@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/vinovo/amazon-bedrock-copilot-chat"
   },
-  "version": "0.16.3",
+  "version": "0.16.4",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -33,102 +33,141 @@
         "vendor": "bedrock",
         "displayName": "Amazon Bedrock",
         "managementCommand": "bedrock.manage"
+      },
+      {
+        "vendor": "custom",
+        "displayName": "Custom Backend",
+        "managementCommand": "custom.manage"
       }
     ],
     "commands": [
       {
         "command": "bedrock.manage",
-        "title": "Manage Amazon Bedrock Provider"
+        "category": "Bedrock Provider",
+        "title": "Manage Amazon Bedrock"
+      },
+      {
+        "command": "custom.manage",
+        "category": "Bedrock Provider",
+        "title": "Manage Custom Backend"
       }
     ],
-    "configuration": {
-      "title": "Amazon Bedrock",
-      "properties": {
-        "bedrock.region": {
-          "type": "string",
-          "default": "us-east-1",
-          "description": "AWS region for Amazon Bedrock API calls",
-          "scope": "resource"
-        },
-        "bedrock.profile": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "description": "AWS named profile from ~/.aws/credentials. Leave empty to use default credentials chain (environment variables, IAM roles, SSO, etc.)",
-          "scope": "resource"
-        },
-        "bedrock.preferredModel": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "description": "Preferred Amazon Bedrock model ID to use by default (e.g., 'anthropic.claude-3-5-sonnet-20241022-v2:0'). Leave empty to let Copilot choose.",
-          "scope": "resource"
-        },
-        "bedrock.thinking.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Fallback: enable extended thinking for supported Anthropic Claude models. This is only used when the model picker does NOT provide a per-model thinking configuration — the picker's per-model setting always takes precedence over this. Leave it as-is unless your VS Code build doesn't surface the per-model thinking control.",
-          "scope": "resource"
-        },
-        "bedrock.thinking.budgetTokens": {
-          "type": "number",
-          "default": 10000,
-          "minimum": 1024,
-          "description": "Fallback only. Number of tokens allocated for thinking (minimum 1024). Note: for Anthropic Claude models the budget is automatically computed from the model's maximum output tokens, so this value is ignored for those models. Does not take precedence over the model picker's per-model configuration.",
-          "scope": "resource"
-        },
-        "bedrock.thinking.effort": {
-          "type": "string",
-          "default": "high",
-          "enum": [
-            "max",
-            "xhigh",
-            "high",
-            "medium",
-            "low"
-          ],
-          "enumDescriptions": [
-            "Absolute maximum capability with no constraints on token spending. Available on Opus 4.6/4.7/4.8, Sonnet 4.6, Sonnet 5.",
-            "Extended capability for long-horizon agentic and coding work. Available on Opus 4.7/4.8, Sonnet 5 (not Opus 4.6 or Sonnet 4.6).",
-            "Maximum capability—Claude uses as many tokens as needed for the best possible outcome. Recommended for complex reasoning and difficult coding problems.",
-            "Balanced approach with moderate token savings. Good for tasks requiring a balance of speed, cost, and performance.",
-            "Most efficient—significant token savings with some capability reduction. Best for simpler tasks that need speed and lowest costs."
-          ],
-          "description": "Fallback thinking effort level for effort-capable Claude models (e.g. Opus 4.8/4.7/4.6/4.5, Sonnet 5, Sonnet 4.6/4.5, Haiku 4.5). This is only used when the model picker does NOT provide a per-model 'Thinking Effort' selection — the picker's per-model value always takes precedence over this setting. Note: 'xhigh' is only accepted by Opus 4.7/4.8 and Sonnet 5; it will be ignored by other models.",
-          "scope": "resource"
-        },
-        "bedrock.thinking.display": {
-          "type": "string",
-          "default": "summarized",
-          "enum": [
-            "summarized",
-            "omitted"
-          ],
-          "enumDescriptions": [
-            "Return summarized thinking text in the response (default).",
-            "Do not stream thinking text (thinking blocks come back empty; the encrypted signature is still returned for multi-turn continuity). Reduces time-to-first-text-token; you are still billed for the full thinking tokens."
-          ],
-          "description": "Fallback: controls how Anthropic Claude thinking content is returned. Only used when the model picker does NOT provide a per-model thinking-display configuration — the picker's per-model value takes precedence.",
-          "scope": "resource"
-        },
-        "bedrock.promptCaching.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable prompt caching for supported models to reduce latency and costs. Caches system prompts, tool definitions, and recent tool results. Disable if you need fully fresh responses or want to avoid cache-related costs.",
-          "scope": "resource"
-        },
-        "bedrock.inferenceProfiles.preferRegional": {
-          "type": "boolean",
-          "default": false,
-          "description": "Prefer regional inference profiles over global ones. Enable this if your policies restrict access to global inference profiles. When enabled, the extension will use regional inference profiles (e.g., eu.anthropic.claude-opus-4-6-v1) instead of global ones (e.g., global.anthropic.claude-opus-4-6-v1).",
-          "scope": "resource"
+    "configuration": [
+      {
+        "title": "Amazon Bedrock",
+        "properties": {
+          "bedrock.region": {
+            "type": "string",
+            "default": "us-east-1",
+            "description": "AWS region for Amazon Bedrock API calls",
+            "scope": "resource"
+          },
+          "bedrock.profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "AWS named profile from ~/.aws/credentials. Leave empty to use default credentials chain (environment variables, IAM roles, SSO, etc.)",
+            "scope": "resource"
+          },
+          "bedrock.preferredModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Preferred Amazon Bedrock model ID to use by default (e.g., 'anthropic.claude-3-5-sonnet-20241022-v2:0'). Leave empty to let Copilot choose.",
+            "scope": "resource"
+          },
+          "bedrock.thinking.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Fallback: enable extended thinking for supported Anthropic Claude models. This is only used when the model picker does NOT provide a per-model thinking configuration — the picker's per-model setting always takes precedence over this. Leave it as-is unless your VS Code build doesn't surface the per-model thinking control.",
+            "scope": "resource"
+          },
+          "bedrock.thinking.budgetTokens": {
+            "type": "number",
+            "default": 10000,
+            "minimum": 1024,
+            "description": "Fallback only. Number of tokens allocated for thinking (minimum 1024). Note: for Anthropic Claude models the budget is automatically computed from the model's maximum output tokens, so this value is ignored for those models. Does not take precedence over the model picker's per-model configuration.",
+            "scope": "resource"
+          },
+          "bedrock.thinking.effort": {
+            "type": "string",
+            "default": "high",
+            "enum": [
+              "max",
+              "xhigh",
+              "high",
+              "medium",
+              "low"
+            ],
+            "enumDescriptions": [
+              "Absolute maximum capability with no constraints on token spending. Available on Opus 4.6/4.7/4.8, Sonnet 4.6, Sonnet 5.",
+              "Extended capability for long-horizon agentic and coding work. Available on Opus 4.7/4.8, Sonnet 5 (not Opus 4.6 or Sonnet 4.6).",
+              "Maximum capability—Claude uses as many tokens as needed for the best possible outcome. Recommended for complex reasoning and difficult coding problems.",
+              "Balanced approach with moderate token savings. Good for tasks requiring a balance of speed, cost, and performance.",
+              "Most efficient—significant token savings with some capability reduction. Best for simpler tasks that need speed and lowest costs."
+            ],
+            "description": "Fallback thinking effort level for effort-capable Claude models (e.g. Opus 4.8/4.7/4.6/4.5, Sonnet 5, Sonnet 4.6/4.5, Haiku 4.5). This is only used when the model picker does NOT provide a per-model 'Thinking Effort' selection — the picker's per-model value always takes precedence over this setting. Note: 'xhigh' is only accepted by Opus 4.7/4.8 and Sonnet 5; it will be ignored by other models.",
+            "scope": "resource"
+          },
+          "bedrock.thinking.display": {
+            "type": "string",
+            "default": "summarized",
+            "enum": [
+              "summarized",
+              "omitted"
+            ],
+            "enumDescriptions": [
+              "Return summarized thinking text in the response (default).",
+              "Do not stream thinking text (thinking blocks come back empty; the encrypted signature is still returned for multi-turn continuity). Reduces time-to-first-text-token; you are still billed for the full thinking tokens."
+            ],
+            "description": "Fallback: controls how Anthropic Claude thinking content is returned. Only used when the model picker does NOT provide a per-model thinking-display configuration — the picker's per-model value takes precedence.",
+            "scope": "resource"
+          },
+          "bedrock.promptCaching.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable prompt caching for supported models to reduce latency and costs. Caches system prompts, tool definitions, and recent tool results. Disable if you need fully fresh responses or want to avoid cache-related costs.",
+            "scope": "resource"
+          },
+          "bedrock.inferenceProfiles.preferRegional": {
+            "type": "boolean",
+            "default": false,
+            "description": "Prefer regional inference profiles over global ones. Enable this if your policies restrict access to global inference profiles. When enabled, the extension will use regional inference profiles (e.g., eu.anthropic.claude-opus-4-6-v1) instead of global ones (e.g., global.anthropic.claude-opus-4-6-v1).",
+            "scope": "resource"
+          }
+        }
+      },
+      {
+        "title": "Custom Backend",
+        "properties": {
+          "custom.baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Base URL of an OpenAI-compatible backend (e.g. https://gateway.example.com). A trailing '/v1' is optional. Set the access token via the 'Manage Custom Model Provider' command.",
+            "scope": "resource"
+          },
+          "custom.models": {
+            "type": "string",
+            "default": "",
+            "description": "Comma-separated model IDs to expose from the custom backend. Leave empty to auto-discover models via the backend's GET /v1/models endpoint.",
+            "scope": "resource"
+          },
+          "custom.allowInsecureTls": {
+            "type": "boolean",
+            "default": false,
+            "description": "Skip TLS certificate verification when calling the custom backend. Enable only for trusted backends that use a private/self-signed certificate authority.",
+            "scope": "resource"
+          }
         }
       }
-    }
+    ]
   },
   "main": "./dist/extension.js",
   "sponsor": {

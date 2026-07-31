@@ -25,3 +25,5 @@ renovate.json
 !CHANGELOG.md
 !LICENSE.md
 !dist/o200k_base.tiktoken
+
+token.txt
