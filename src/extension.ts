@@ -23,7 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   // Generic OpenAI-compatible backend provider (base URL + access token).
-  const customProvider = new CustomChatModelProvider(context.secrets);
+  const customProvider = new CustomChatModelProvider(context.secrets, context.globalState);
   const customProviderDisposable = vscode.lm.registerLanguageModelChatProvider(
     "custom",
     customProvider,

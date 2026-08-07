@@ -18,6 +18,7 @@ export interface CustomBackendSettings {
   readonly allowInsecureTls: boolean;
   readonly apiKey: string | undefined;
   readonly baseUrl: string | undefined;
+  readonly maxInputTokens: number;
   /** Explicit model IDs to expose when auto-discovery is unavailable. */
   readonly models: string[];
 }
@@ -28,6 +29,7 @@ export async function getCustomBackendSettings(
   const config = vscode.workspace.getConfiguration("custom");
   const baseUrl = normalizeBaseUrl(config.get<null | string>("baseUrl"));
   const allowInsecureTls = config.get<boolean>("allowInsecureTls") ?? false;
+  const maxInputTokens = config.get<number>("maxInputTokens") ?? 128_000;
   const rawModels = config.get<string>("models") ?? "";
   const models = rawModels
     .split(",")
@@ -36,7 +38,7 @@ export async function getCustomBackendSettings(
 
   const apiKey = (await secrets.get(CUSTOM_API_KEY_SECRET)) || undefined;
 
-  return { allowInsecureTls, apiKey, baseUrl, models };
+  return { allowInsecureTls, apiKey, baseUrl, maxInputTokens, models };
 }
 
 /** Returns a ready-to-use client config, or `undefined` if not fully configured. */

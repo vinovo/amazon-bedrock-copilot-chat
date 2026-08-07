@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/vinovo/amazon-bedrock-copilot-chat"
   },
-  "version": "0.16.4",
+  "version": "0.16.6",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -163,6 +163,13 @@
             "type": "boolean",
             "default": false,
             "description": "Skip TLS certificate verification when calling the custom backend. Enable only for trusted backends that use a private/self-signed certificate authority.",
+            "scope": "resource"
+          },
+          "custom.maxInputTokens": {
+            "type": "number",
+            "default": 128000,
+            "minimum": 1024,
+            "description": "Context window size (input tokens) advertised for all custom backend models. This sets the denominator in the context-window tracker. Adjust to match your model's actual context limit (e.g. 32000, 128000, 200000).",
             "scope": "resource"
           }
         }

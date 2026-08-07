@@ -14,6 +14,8 @@ export interface ChatCompletionRequest {
   messages: OpenAIChatMessage[];
   model: string;
   stream: true;
+  /** Request that the backend include token-usage data in the final streaming chunk. */
+  stream_options?: { include_usage?: boolean };
   temperature?: number;
   tool_choice?: "auto" | "none" | "required";
   tools?: OpenAITool[];

@@ -54229,10 +54229,11 @@ async function getCustomBackendSettings(secrets) {
   const config = vscode4.workspace.getConfiguration("custom");
   const baseUrl = normalizeBaseUrl(config.get("baseUrl"));
   const allowInsecureTls = config.get("allowInsecureTls") ?? false;
+  const maxInputTokens = config.get("maxInputTokens") ?? 128000;
   const rawModels = config.get("models") ?? "";
   const models = rawModels.split(",").map((m) => m.trim()).filter((m) => m.length > 0);
   const apiKey = await secrets.get(CUSTOM_API_KEY_SECRET) || undefined;
-  return { allowInsecureTls, apiKey, baseUrl, models };
+  return { allowInsecureTls, apiKey, baseUrl, maxInputTokens, models };
 }
 function toBackendConfig(settings) {
   if (!settings.baseUrl || !settings.apiKey) {
@@ -54675,16 +54676,18 @@ function toImagePart(part) {
 // src/custom/provider.ts
 var CUSTOM_MODEL_PICKER_CATEGORY = { label: "Custom Backend", order: 60 };
 var CUSTOM_ERROR_SENTINEL_ID = "__custom_error_sentinel__";
-var DEFAULT_MAX_INPUT_TOKENS = 128000;
 var DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
 class CustomChatModelProvider {
   secrets;
+  globalState;
+  static CONTEXT_SELECTION_KEY = "custom.contextSelection";
   _onDidChange = new vscode8.EventEmitter;
   onDidChangeLanguageModelChatInformation = this._onDidChange.event;
   client = new CustomBackendClient({ apiKey: "", baseUrl: "" });
-  constructor(secrets) {
+  constructor(secrets, globalState) {
     this.secrets = secrets;
+    this.globalState = globalState;
   }
   dispose() {
     this._onDidChange.dispose();
@@ -54733,13 +54736,23 @@ class CustomChatModelProvider {
       throw new Error("Custom backend is not configured (missing base URL or access token).");
     }
     this.client.setConfig(config);
+    const rawContextLength = options.modelConfiguration?.contextLength;
+    const pickedContext = typeof rawContextLength === "number" ? rawContextLength : undefined;
+    if (typeof pickedContext === "number" && Number.isFinite(pickedContext)) {
+      const stored = this.getPersistedContextLength(model.id);
+      if (pickedContext !== stored) {
+        await this.persistContextLength(model.id, pickedContext);
+        this.notifyModelInformationChanged("context length changed");
+      }
+    }
     const abortController = new AbortController;
     const cancellation = token.onCancellationRequested(() => abortController.abort());
     try {
       const request = {
         messages: convertMessages(messages),
         model: model.id,
-        stream: true
+        stream: true,
+        stream_options: { include_usage: true }
       };
       const tools = convertTools(options.tools);
       if (tools) {
@@ -54774,17 +54787,42 @@ class CustomChatModelProvider {
     }
     return typeof text === "string" ? countStringTokens(text) : countMessageTokens(text);
   }
-  buildModelInfo(id, caps) {
+  accumulateToolCall(tc, accumulators) {
+    const acc = accumulators.get(tc.index) ?? { args: "", id: "", name: "" };
+    if (tc.id)
+      acc.id = tc.id;
+    if (tc.name)
+      acc.name = tc.name;
+    if (tc.argumentsFragment)
+      acc.args += tc.argumentsFragment;
+    accumulators.set(tc.index, acc);
+  }
+  buildModelInfo(id, defaultMaxInputTokens, caps) {
+    const maxInputTokens = this.getPersistedContextLength(id) ?? defaultMaxInputTokens;
+    const contextLengthSchema = {
+      default: maxInputTokens,
+      description: "Context window size for this model.",
+      enum: [128000, 200000, 1e6],
+      enumDescriptions: [
+        "128K token context window.",
+        "200K token context window.",
+        "1M token context window."
+      ],
+      enumItemLabels: ["128K", "200K", "1M"],
+      group: "tokens",
+      type: "number"
+    };
     return {
       capabilities: {
         imageInput: caps?.vision ?? false,
         toolCalling: caps?.toolCalling ?? true
       },
       category: CUSTOM_MODEL_PICKER_CATEGORY,
+      configurationSchema: { properties: { contextLength: contextLengthSchema } },
       family: "custom",
       id,
       isUserSelectable: true,
-      maxInputTokens: DEFAULT_MAX_INPUT_TOKENS,
+      maxInputTokens,
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
       name: id,
       tooltip: `Custom backend model: ${id}`,
@@ -54824,39 +54862,75 @@ class CustomChatModelProvider {
       progress.report(new vscode8.LanguageModelToolCallPart(acc.id || acc.name, acc.name, input));
     }
   }
+  getPersistedContextLength(modelId) {
+    const map = this.globalState.get(CustomChatModelProvider.CONTEXT_SELECTION_KEY, {});
+    const value = map[modelId];
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  }
+  async persistContextLength(modelId, maxInputTokens) {
+    const map = {
+      ...this.globalState.get(CustomChatModelProvider.CONTEXT_SELECTION_KEY, {}),
+      [modelId]: maxInputTokens
+    };
+    await this.globalState.update(CustomChatModelProvider.CONTEXT_SELECTION_KEY, map);
+  }
+  reportUsage(usage, progress) {
+    if (usage?.promptTokens === undefined || usage.completionTokens === undefined)
+      return;
+    try {
+      const completionTokens = usage.completionTokens;
+      const promptTokens = usage.promptTokens;
+      progress.report(vscode8.LanguageModelDataPart.json({
+        completion_tokens: completionTokens,
+        prompt_tokens: promptTokens,
+        prompt_tokens_details: { cached_tokens: 0 },
+        total_tokens: promptTokens + completionTokens
+      }, "usage"));
+      logger.debug("[Custom Provider] Reported token usage", {
+        completionTokens,
+        promptTokens,
+        totalTokens: promptTokens + completionTokens
+      });
+    } catch (error) {
+      logger.debug("[Custom Provider] Failed to report usage data part", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
   async resolveModels(settings, token) {
     const abortController = new AbortController;
     const cancellation = token.onCancellationRequested(() => abortController.abort());
     try {
       if (settings.models.length > 0) {
-        return settings.models.map((id) => this.buildModelInfo(id));
+        return settings.models.map((id) => this.buildModelInfo(id, settings.maxInputTokens));
       }
       const discovered = await this.client.listModels(abortController.signal);
-      return discovered.map((m) => this.buildModelInfo(m.id, { toolCalling: m.toolCalling, vision: m.vision }));
+      return discovered.map((m) => this.buildModelInfo(m.id, settings.maxInputTokens, {
+        toolCalling: m.toolCalling,
+        vision: m.vision
+      }));
     } finally {
       cancellation.dispose();
     }
   }
   async streamResponse(request, progress, signal) {
     const toolAccumulators = new Map;
+    let lastUsage;
     for await (const delta of this.client.streamChat(request, signal)) {
       if (delta.content) {
         progress.report(new vscode8.LanguageModelTextPart(delta.content));
       }
       if (delta.toolCalls) {
         for (const tc of delta.toolCalls) {
-          const acc = toolAccumulators.get(tc.index) ?? { args: "", id: "", name: "" };
-          if (tc.id)
-            acc.id = tc.id;
-          if (tc.name)
-            acc.name = tc.name;
-          if (tc.argumentsFragment)
-            acc.args += tc.argumentsFragment;
-          toolAccumulators.set(tc.index, acc);
+          this.accumulateToolCall(tc, toolAccumulators);
         }
+      }
+      if (delta.usage) {
+        lastUsage = delta.usage;
       }
     }
     this.flushToolCalls(toolAccumulators, progress);
+    this.reportUsage(lastUsage, progress);
   }
 }
 function mapToolChoice(mode) {
@@ -57853,7 +57927,7 @@ function activate(context) {
   const manageCmdDisposable = vscode12.commands.registerCommand("bedrock.manage", async () => {
     await manageSettings(context.secrets, context.globalState);
   });
-  const customProvider = new CustomChatModelProvider(context.secrets);
+  const customProvider = new CustomChatModelProvider(context.secrets, context.globalState);
   const customProviderDisposable = vscode12.lm.registerLanguageModelChatProvider("custom", customProvider);
   const customManageCmdDisposable = vscode12.commands.registerCommand("custom.manage", async () => {
     await manageCustomSettings(context.secrets);
@@ -57915,5 +57989,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=2AE622301F045E9364756E2164756E21
+//# debugId=E322F453848AE5BF64756E2164756E21
 //# sourceMappingURL=extension.js.map
