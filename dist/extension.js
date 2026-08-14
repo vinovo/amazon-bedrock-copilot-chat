@@ -54736,13 +54736,13 @@ class CustomChatModelProvider {
       throw new Error("Custom backend is not configured (missing base URL or access token).");
     }
     this.client.setConfig(config);
-    const rawContextLength = options.modelConfiguration?.contextLength;
-    const pickedContext = typeof rawContextLength === "number" ? rawContextLength : undefined;
+    const rawContextSize = options.modelConfiguration?.contextSize;
+    const pickedContext = typeof rawContextSize === "number" ? rawContextSize : undefined;
     if (typeof pickedContext === "number" && Number.isFinite(pickedContext)) {
-      const stored = this.getPersistedContextLength(model.id);
+      const stored = this.getPersistedContextSize(model.id);
       if (pickedContext !== stored) {
-        await this.persistContextLength(model.id, pickedContext);
-        this.notifyModelInformationChanged("context length changed");
+        await this.persistContextSize(model.id, pickedContext);
+        this.notifyModelInformationChanged("context size changed");
       }
     }
     const abortController = new AbortController;
@@ -54798,8 +54798,8 @@ class CustomChatModelProvider {
     accumulators.set(tc.index, acc);
   }
   buildModelInfo(id, defaultMaxInputTokens, caps) {
-    const maxInputTokens = this.getPersistedContextLength(id) ?? defaultMaxInputTokens;
-    const contextLengthSchema = {
+    const maxInputTokens = this.getPersistedContextSize(id) ?? defaultMaxInputTokens;
+    const contextSizeSchema = {
       default: maxInputTokens,
       description: "Context window size for this model.",
       enum: [128000, 200000, 1e6],
@@ -54818,7 +54818,7 @@ class CustomChatModelProvider {
         toolCalling: caps?.toolCalling ?? true
       },
       category: CUSTOM_MODEL_PICKER_CATEGORY,
-      configurationSchema: { properties: { contextLength: contextLengthSchema } },
+      configurationSchema: { properties: { contextSize: contextSizeSchema } },
       family: "custom",
       id,
       isUserSelectable: true,
@@ -54862,12 +54862,12 @@ class CustomChatModelProvider {
       progress.report(new vscode8.LanguageModelToolCallPart(acc.id || acc.name, acc.name, input));
     }
   }
-  getPersistedContextLength(modelId) {
+  getPersistedContextSize(modelId) {
     const map = this.globalState.get(CustomChatModelProvider.CONTEXT_SELECTION_KEY, {});
     const value = map[modelId];
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
   }
-  async persistContextLength(modelId, maxInputTokens) {
+  async persistContextSize(modelId, maxInputTokens) {
     const map = {
       ...this.globalState.get(CustomChatModelProvider.CONTEXT_SELECTION_KEY, {}),
       [modelId]: maxInputTokens
@@ -56642,7 +56642,7 @@ var BEDROCK_ERROR_SENTINEL_ID = "__bedrock_error_sentinel__";
 class BedrockChatModelProvider {
   secrets;
   globalState;
-  static CONTEXT_SELECTION_MIGRATION_KEY = "bedrock.contextSelection.clearedStale1M";
+  static CONTEXT_SELECTION_MIGRATION_KEY = "bedrock.contextSelection.clearedStale1M-v2";
   static CONTEXT_SELECTION_STATE_KEY = "bedrock.contextSelection.byModel";
   static MODEL_CHANGE_ECHO_WINDOW_MS = 5000;
   _onDidChangeLanguageModelInformation = new vscode11.EventEmitter;
@@ -57307,7 +57307,7 @@ class BedrockChatModelProvider {
       enumItemLabels: ["Summarized", "Omitted"],
       type: "string"
     } : undefined;
-    const contextLength = supportsToggleable1MContext ? {
+    const contextSize = supportsToggleable1MContext ? {
       default: context1MEnabled ? 1e6 : 200000,
       description: "Context window size for this model.",
       enum: [200000, 1e6],
@@ -57324,7 +57324,7 @@ class BedrockChatModelProvider {
         ...thinkingEnabled ? { thinkingEnabled } : {},
         ...thinkingEffort ? { thinkingEffort } : {},
         ...thinkingDisplay ? { thinkingDisplay } : {},
-        ...contextLength ? { contextLength } : {}
+        ...contextSize ? { contextSize } : {}
       }
     };
   }
@@ -57811,16 +57811,16 @@ class BedrockChatModelProvider {
     return selection === undefined ? false : selection >= 1e6;
   }
   resolveRequestContext1M(modelId, modelConfiguration) {
-    const contextLength = modelConfiguration?.contextLength;
-    if (typeof contextLength === "number" && Number.isFinite(contextLength)) {
+    const contextSize = modelConfiguration?.contextSize;
+    if (typeof contextSize === "number" && Number.isFinite(contextSize)) {
       logger.debug("[Bedrock Model Provider] Context-size picker override received", {
-        contextLength,
-        enables1M: contextLength >= 1e6,
+        contextSize,
+        enables1M: contextSize >= 1e6,
         modelId
       });
-      this.setPersistedContextSelection(modelId, contextLength).then((changed) => {
+      this.setPersistedContextSelection(modelId, contextSize).then((changed) => {
         if (changed) {
-          this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextLength}`);
+          this.notifyModelInformationChanged(`context size for ${modelId} -> ${contextSize}`);
         }
       }, (error) => {
         logger.warn("[Bedrock Model Provider] Failed to persist context selection", {
@@ -57828,11 +57828,11 @@ class BedrockChatModelProvider {
           modelId
         });
       });
-      return contextLength >= 1e6;
+      return contextSize >= 1e6;
     }
-    if (contextLength !== undefined) {
-      logger.debug("[Bedrock Model Provider] Ignoring non-numeric contextLength override", {
-        contextLength,
+    if (contextSize !== undefined) {
+      logger.debug("[Bedrock Model Provider] Ignoring non-numeric contextSize override", {
+        contextSize,
         modelId
       });
     }
@@ -57989,5 +57989,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=E322F453848AE5BF64756E2164756E21
+//# debugId=8ADB2E687C66BBA664756E2164756E21
 //# sourceMappingURL=extension.js.map

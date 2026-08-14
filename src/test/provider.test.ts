@@ -1225,70 +1225,70 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
   });
 
   suite("model configuration schema (picker controls)", () => {
-    test("includes contextLength tokens picker for toggleable-1M models", () => {
+    test("includes contextSize tokens picker for toggleable-1M models", () => {
       // Sonnet 4.5 has a toggleable 1M context window (standard 200K).
       const schema = buildModelConfigurationSchema("anthropic.claude-sonnet-4-5-20250929-v1:0");
-      const contextLength = schema?.properties?.contextLength;
-      assert.ok(contextLength, "expected contextLength property");
+      const contextSize = schema?.properties?.contextSize;
+      assert.ok(contextSize, "expected contextSize property");
       // `group: "tokens"` makes VS Code render this as the dedicated "Context Size" picker.
-      assert.equal(contextLength.group, "tokens");
-      assert.equal(contextLength.type, "number");
+      assert.equal(contextSize.group, "tokens");
+      assert.equal(contextSize.type, "number");
       // Enum values MUST be numeric token counts (VS Code formats them via formatTokenCount).
-      assert.deepEqual(contextLength.enum, [200_000, 1_000_000]);
-      assert.deepEqual(contextLength.enumItemLabels, ["200K", "1M"]);
-      assert.equal(contextLength.default, 1_000_000);
+      assert.deepEqual(contextSize.enum, [200_000, 1_000_000]);
+      assert.deepEqual(contextSize.enumItemLabels, ["200K", "1M"]);
+      assert.equal(contextSize.default, 1_000_000);
     });
 
-    test("includes contextLength tokens picker for Opus 4.8 (toggleable 200K<->1M)", () => {
+    test("includes contextSize tokens picker for Opus 4.8 (toggleable 200K<->1M)", () => {
       // Opus 4.8 exposes a toggleable 1M context window (200K default), matching the official
       // Claude Code CLI which offers an `opus[1m]` toggle for Opus 4.6/4.7/4.8.
       const schema = buildModelConfigurationSchema("anthropic.claude-opus-4-8-20251101-v1:0");
-      const contextLength = schema?.properties?.contextLength;
-      assert.ok(contextLength, "expected contextLength property for Opus 4.8");
-      assert.equal(contextLength.group, "tokens");
-      assert.deepEqual(contextLength.enum, [200_000, 1_000_000]);
+      const contextSize = schema?.properties?.contextSize;
+      assert.ok(contextSize, "expected contextSize property for Opus 4.8");
+      assert.equal(contextSize.group, "tokens");
+      assert.deepEqual(contextSize.enum, [200_000, 1_000_000]);
     });
 
-    test("includes contextLength tokens picker for Opus 4.6 (toggleable 200K<->1M)", () => {
+    test("includes contextSize tokens picker for Opus 4.6 (toggleable 200K<->1M)", () => {
       const schema = buildModelConfigurationSchema("anthropic.claude-opus-4-6-v1");
-      assert.ok(schema?.properties?.contextLength, "expected contextLength property for Opus 4.6");
+      assert.ok(schema?.properties?.contextSize, "expected contextSize property for Opus 4.6");
     });
 
-    test("includes contextLength tokens picker for Sonnet 5 (toggleable 200K<->1M)", () => {
+    test("includes contextSize tokens picker for Sonnet 5 (toggleable 200K<->1M)", () => {
       // Sonnet 5 exposes a toggleable 1M context window (200K default), like Opus 4.6/4.7/4.8.
       const schema = buildModelConfigurationSchema("anthropic.claude-sonnet-5");
-      const contextLength = schema?.properties?.contextLength;
-      assert.ok(contextLength, "expected contextLength property for Sonnet 5");
-      assert.equal(contextLength.group, "tokens");
-      assert.deepEqual(contextLength.enum, [200_000, 1_000_000]);
+      const contextSize = schema?.properties?.contextSize;
+      assert.ok(contextSize, "expected contextSize property for Sonnet 5");
+      assert.equal(contextSize.group, "tokens");
+      assert.deepEqual(contextSize.enum, [200_000, 1_000_000]);
     });
 
-    test("contextLength default follows the persisted/build-time selection", () => {
+    test("contextSize default follows the persisted/build-time selection", () => {
       // The picker default is the advertised window: 1M when enabled, 200K otherwise. This is what
       // keeps the picker UI in sync with the badge denominator after a refresh.
       const enabled = buildModelConfigurationSchema(
         "anthropic.claude-opus-4-8-20251101-v1:0",
         true,
       );
-      assert.equal(enabled?.properties?.contextLength?.default, 1_000_000);
+      assert.equal(enabled?.properties?.contextSize?.default, 1_000_000);
 
       const disabled = buildModelConfigurationSchema(
         "anthropic.claude-opus-4-8-20251101-v1:0",
         false,
       );
-      assert.equal(disabled?.properties?.contextLength?.default, 200_000);
+      assert.equal(disabled?.properties?.contextSize?.default, 200_000);
     });
 
-    test("omits contextLength for Opus 4.5 (200K only, no 1M)", () => {
+    test("omits contextSize for Opus 4.5 (200K only, no 1M)", () => {
       // Opus 4.5 has a fixed 200K window on Bedrock — no 200K<->1M choice, so no picker.
       const schema = buildModelConfigurationSchema("anthropic.claude-opus-4-5-20251101-v1:0");
-      assert.ok(!schema?.properties?.contextLength);
+      assert.ok(!schema?.properties?.contextSize);
     });
 
-    test("omits contextLength for models without 1M context support", () => {
+    test("omits contextSize for models without 1M context support", () => {
       // Haiku 3.5 does not support the 1M context window.
       const schema = buildModelConfigurationSchema("anthropic.claude-3-5-haiku-20241022-v1:0");
-      assert.ok(!schema?.properties?.contextLength);
+      assert.ok(!schema?.properties?.contextSize);
     });
 
     test("returns undefined for models with no configurable capabilities", () => {
@@ -1299,24 +1299,24 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
   });
 
   suite("model configuration overrides (picker -> request)", () => {
-    test("contextLength=200000 disables the 1M context window", () => {
-      const { context1MEnabled } = applyConfigOverride({ contextLength: 200_000 });
+    test("contextSize=200000 disables the 1M context window", () => {
+      const { context1MEnabled } = applyConfigOverride({ contextSize: 200_000 });
       assert.equal(context1MEnabled, false);
     });
 
-    test("contextLength=1000000 enables the 1M context window", () => {
-      const { context1MEnabled } = applyConfigOverride({ contextLength: 1_000_000 });
+    test("contextSize=1000000 enables the 1M context window", () => {
+      const { context1MEnabled } = applyConfigOverride({ contextSize: 1_000_000 });
       assert.equal(context1MEnabled, true);
     });
 
-    test("absent contextLength defaults to 200K (no persisted selection)", () => {
+    test("absent contextSize defaults to 200K (no persisted selection)", () => {
       const { context1MEnabled, settings } = applyConfigOverride({ thinkingEffort: "low" });
       assert.equal(context1MEnabled, false);
       assert.equal(settings.thinking.effort, "low");
     });
 
-    test("non-numeric contextLength value is ignored (defaults to 200K)", () => {
-      const { context1MEnabled } = applyConfigOverride({ contextLength: "bogus" });
+    test("non-numeric contextSize value is ignored (defaults to 200K)", () => {
+      const { context1MEnabled } = applyConfigOverride({ contextSize: "bogus" });
       assert.equal(context1MEnabled, false);
     });
   });
@@ -1327,18 +1327,18 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     test("per-request picker value wins outright", () => {
       // Picker says 200K -> 200K, regardless of any prior state.
       const context1MEnabled = applyConfigOverrideWithPersisted(
-        { contextLength: 200_000 },
+        { contextSize: 200_000 },
         {}, // no persisted selection yet
         sonnet5,
       );
       assert.equal(context1MEnabled, false);
     });
 
-    test("persisted picker selection applies when contextLength is absent", () => {
-      // The core fix: VS Code omits contextLength on most turns. The persisted 1M picker choice
+    test("persisted picker selection applies when contextSize is absent", () => {
+      // The core fix: VS Code omits contextSize on most turns. The persisted 1M picker choice
       // must still drive the window.
       const context1MEnabled = applyConfigOverrideWithPersisted(
-        { thinkingEffort: "high" }, // no contextLength on this turn
+        { thinkingEffort: "high" }, // no contextSize on this turn
         { [sonnet5]: 1_000_000 },
         sonnet5,
       );
@@ -1356,7 +1356,7 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
 
     test("defaults to 200K when there is no persisted selection", () => {
       const context1MEnabled = applyConfigOverrideWithPersisted(
-        { thinkingEffort: "low" }, // no contextLength
+        { thinkingEffort: "low" }, // no contextSize
         {}, // nothing persisted
         sonnet5,
       );
@@ -1427,7 +1427,8 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
   });
 
   suite("stale 1M context-selection migration", () => {
-    const MIGRATION_KEY = "bedrock.contextSelection.clearedStale1M";
+    // Versioned gate key: bumping the suffix re-runs the one-time clear once for existing users.
+    const MIGRATION_KEY = "bedrock.contextSelection.clearedStale1M-v2";
     const opus = "global.anthropic.claude-opus-4-8";
     const sonnet = "global.anthropic.claude-sonnet-4-6";
 

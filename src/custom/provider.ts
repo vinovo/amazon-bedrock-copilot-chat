@@ -116,16 +116,16 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     }
     this.client.setConfig(config);
 
-    // Persist a new context-length picker selection, then refresh the model
+    // Persist a new context-size picker selection, then refresh the model
     // list so the badge denominator updates on the next turn.
-    const rawContextLength = (options.modelConfiguration as Record<string, unknown> | undefined)
-      ?.contextLength;
-    const pickedContext = typeof rawContextLength === "number" ? rawContextLength : undefined;
+    const rawContextSize = (options.modelConfiguration as Record<string, unknown> | undefined)
+      ?.contextSize;
+    const pickedContext = typeof rawContextSize === "number" ? rawContextSize : undefined;
     if (typeof pickedContext === "number" && Number.isFinite(pickedContext)) {
-      const stored = this.getPersistedContextLength(model.id);
+      const stored = this.getPersistedContextSize(model.id);
       if (pickedContext !== stored) {
-        await this.persistContextLength(model.id, pickedContext);
-        this.notifyModelInformationChanged("context length changed");
+        await this.persistContextSize(model.id, pickedContext);
+        this.notifyModelInformationChanged("context size changed");
       }
     }
 
@@ -198,8 +198,10 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     defaultMaxInputTokens: number,
     caps?: { toolCalling?: boolean; vision?: boolean },
   ): CustomLanguageModelChatInformation {
-    const maxInputTokens = this.getPersistedContextLength(id) ?? defaultMaxInputTokens;
-    const contextLengthSchema = {
+    const maxInputTokens = this.getPersistedContextSize(id) ?? defaultMaxInputTokens;
+    // The property key MUST be `contextSize`: VS Code's context-usage badge reads the window
+    // denominator from `modelConfiguration.contextSize` / `properties.contextSize.default`.
+    const contextSizeSchema = {
       default: maxInputTokens,
       description: "Context window size for this model.",
       enum: [128_000, 200_000, 1_000_000],
@@ -220,7 +222,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         toolCalling: caps?.toolCalling ?? true,
       },
       category: CUSTOM_MODEL_PICKER_CATEGORY,
-      configurationSchema: { properties: { contextLength: contextLengthSchema } },
+      configurationSchema: { properties: { contextSize: contextSizeSchema } },
       family: "custom",
       id,
       isUserSelectable: true,
@@ -269,7 +271,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     }
   }
 
-  private getPersistedContextLength(modelId: string): number | undefined {
+  private getPersistedContextSize(modelId: string): number | undefined {
     const map = this.globalState.get<Record<string, number>>(
       CustomChatModelProvider.CONTEXT_SELECTION_KEY,
       {},
@@ -278,7 +280,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
   }
 
-  private async persistContextLength(modelId: string, maxInputTokens: number): Promise<void> {
+  private async persistContextSize(modelId: string, maxInputTokens: number): Promise<void> {
     const map = {
       ...this.globalState.get<Record<string, number>>(
         CustomChatModelProvider.CONTEXT_SELECTION_KEY,

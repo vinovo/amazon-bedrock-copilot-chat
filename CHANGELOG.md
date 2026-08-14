@@ -5,6 +5,23 @@ All notable changes to the "amazon-bedrock-copilot-chat" extension will be docum
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.7] - 2026-08-14
+
+### Fixed
+
+- **Context-window badge ignored the Context Size picker (always showed the model's full
+  window)**: the per-model picker schema property was named `contextLength`, but VS Code's
+  context-usage badge reads the window denominator from the property named `contextSize`
+  (`resolveContextWindowInputTokens` in `chatContextUsageWidget.ts`). The picker button still
+  worked (it is discovered by `group: "tokens"`), but the badge silently fell back to the
+  advertised `maxInputTokens`, so it tracked stale persisted state instead of the picker — e.g.
+  Sonnet 4.6 stuck at 1M while Opus 4.8 happened to look correct. Renamed the property to
+  `contextSize` in both the Bedrock and custom providers so the badge follows the picker.
+- **Stale pre-fix 1M selections**: bumped the one-time stale-1M migration gate
+  (`clearedStale1M` → `clearedStale1M-v2`) so the cleanup re-runs once on the next reload for
+  existing installs, flushing leftover 1M entries that predate this fix. Deliberate future picks
+  are preserved.
+
 ## [0.16.3] - 2026-07-27
 
 ### Added
