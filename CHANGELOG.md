@@ -5,6 +5,45 @@ All notable changes to the "amazon-bedrock-copilot-chat" extension will be docum
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-08-19
+
+### Fixed
+
+- **Custom backend chat requests failed with "missing base URL or access token"** even though
+  model discovery worked: the backend group config (baseUrl/apiKey) is only supplied to discovery
+  via `options.configuration`, while the response only receives per-model `modelConfiguration`. The
+  group config is now embedded in each model at discovery and read back from `model.configuration`
+  at response time (matching VS Code's built-in BYOK providers).
+
+## [0.17.0] - 2026-08-19
+
+### Added
+
+- **Multiple custom backends via native provider groups**: the `custom` (OpenAI-compatible)
+  provider now declares a `configuration` schema, so VS Code renders its native "add a backend"
+  UI and each backend is stored as its own language-model provider _group_. Each group carries its
+  own friendly `name` (shown as the picker heading), `baseUrl`, `apiKey` (stored in
+  SecretStorage), optional manual `models`, `maxInputTokens`, and TLS options (`allowInsecureTls`,
+  `caBundlePath`). Per-model token limits reported by the backend (`max_input_tokens` /
+  `context_length` / `max_output_tokens`) are now honored, and context-size picker selections are
+  namespaced per backend so the same model id at different backends no longer collide.
+- **Custom CA bundle support**: a per-request `undici` dispatcher lets a backend trust a private
+  PEM CA bundle (e.g. a corporate proxy CA) without disabling TLS verification globally.
+
+### Changed
+
+- The `custom.manage` command and the flat `custom.*` workspace settings were removed in favor of
+  the native provider-group configuration described above.
+
+### Fixed
+
+- **Custom backend context-window badge numerator not accumulating**: the per-turn `usage` report
+  could be dropped when a gateway closed the stream without a trailing blank line, when a usage
+  object was split across chunks, or when `completion_tokens` was omitted. The SSE parser now
+  flushes its trailing buffer, usage is merged field-by-field across chunks, and the report is
+  emitted whenever `prompt_tokens` is known — so the badge tracks the growing conversation the same
+  way the Bedrock provider does.
+
 ## [0.16.7] - 2026-08-14
 
 ### Fixed

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { Agent } from "undici";
+
 import { logger } from "../logger";
 
 /**
@@ -28,11 +31,17 @@ export interface CustomBackendConfig {
   readonly apiKey: string;
   /** Root URL of the backend, e.g. `https://gateway.example.com` (trailing `/v1` optional). */
   readonly baseUrl: string;
+  /** Optional PEM CA bundle path to trust for TLS (e.g. a corporate proxy CA). */
+  readonly caBundlePath?: string;
 }
 
 /** A single model as reported by `GET /v1/models`. */
 export interface CustomModel {
   readonly id: string;
+  /** Context window (input tokens) reported by the backend, if any. */
+  readonly maxInputTokens?: number;
+  /** Maximum output tokens reported by the backend, if any. */
+  readonly maxOutputTokens?: number;
   /** Whether the backend reports tool/function-calling support for this model. */
   readonly toolCalling?: boolean;
   /** Whether the backend reports image input support for this model. */
@@ -81,6 +90,8 @@ export interface StreamDelta {
 }
 
 export class CustomBackendClient {
+  private dispatcherCache: { agent: Agent; key: string } | undefined;
+
   constructor(private config: CustomBackendConfig) {}
 
   /**
@@ -90,9 +101,11 @@ export class CustomBackendClient {
    */
   async listModels(signal?: AbortSignal): Promise<CustomModel[]> {
     const url = this.endpoint("/models");
-    const response = await withInsecureTls(this.config.allowInsecureTls, async () =>
-      fetch(url, { headers: this.headers(), signal }),
-    );
+    const response = await fetch(url, {
+      dispatcher: this.dispatcher(),
+      headers: this.headers(),
+      signal,
+    } as RequestInit);
 
     if (!response.ok) {
       const body = await safeText(response);
@@ -129,14 +142,13 @@ export class CustomBackendClient {
     signal?: AbortSignal,
   ): AsyncGenerator<StreamDelta> {
     const url = this.endpoint("/chat/completions");
-    const response = await withInsecureTls(this.config.allowInsecureTls, async () =>
-      fetch(url, {
-        body: JSON.stringify(request),
-        headers: { ...this.headers(), "content-type": "application/json" },
-        method: "POST",
-        signal,
-      }),
-    );
+    const response = await fetch(url, {
+      body: JSON.stringify(request),
+      dispatcher: this.dispatcher(),
+      headers: { ...this.headers(), "content-type": "application/json" },
+      method: "POST",
+      signal,
+    } as RequestInit);
 
     if (!response.ok || !response.body) {
       const body = await safeText(response);
@@ -147,6 +159,45 @@ export class CustomBackendClient {
     }
 
     yield* parseSseStream(response.body);
+  }
+
+  /**
+   * Build (and cache) an undici dispatcher matching the current TLS settings.
+   * Returns `undefined` for the default case so the process-global dispatcher
+   * is used. A custom CA bundle keeps verification on; `allowInsecureTls`
+   * disables it entirely. `VERIFY_X509_STRICT` is relaxed for custom CAs
+   * because some corporate CAs use non-critical Basic Constraints that
+   * OpenSSL 3.x rejects under strict verification.
+   */
+  private dispatcher(): Agent | undefined {
+    const { allowInsecureTls, caBundlePath } = this.config;
+    if (!allowInsecureTls && !caBundlePath) {
+      this.dispatcherCache = undefined;
+      return undefined;
+    }
+
+    const key = `${allowInsecureTls ? "insecure" : "secure"}|${caBundlePath ?? ""}`;
+    if (this.dispatcherCache?.key === key) {
+      return this.dispatcherCache.agent;
+    }
+
+    const connect: Record<string, unknown> = {};
+    if (allowInsecureTls) {
+      connect.rejectUnauthorized = false;
+    } else if (caBundlePath) {
+      try {
+        connect.ca = readFileSync(caBundlePath);
+      } catch (error) {
+        logger.error("[Custom Provider] Failed to read CA bundle", {
+          caBundlePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const agent = new Agent({ connect });
+    this.dispatcherCache = { agent, key };
+    return agent;
   }
 
   private endpoint(path: string): string {
@@ -208,6 +259,17 @@ function firstString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
     for (const item of value as unknown[]) {
       if (typeof item === "string" && item.length > 0) return item;
+    }
+  }
+  return undefined;
+}
+
+/** First positive-number field found among the given keys, or `undefined`. */
+function numericField(obj: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
     }
   }
   return undefined;
@@ -275,7 +337,8 @@ function parseChunk(chunk: unknown): StreamDelta | undefined {
 function parseModelList(json: unknown): CustomModel[] {
   const models: CustomModel[] = [];
   const seen = new Set<string>();
-  for (const entry of extractModelList(json)) {
+  const entries = extractModelList(json);
+  for (const entry of entries) {
     if (typeof entry === "string") {
       if (!seen.has(entry)) {
         seen.add(entry);
@@ -292,6 +355,8 @@ function parseModelList(json: unknown): CustomModel[] {
       seen.add(id);
       models.push({
         id,
+        maxInputTokens: numericField(obj, ["max_input_tokens", "context_length", "context_window"]),
+        maxOutputTokens: numericField(obj, ["max_output_tokens", "max_tokens"]),
         toolCalling: supportsTools(obj),
         vision: supportsVision(obj),
       });
@@ -332,6 +397,11 @@ async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator
   const decoder = new TextDecoder();
   let buffer = "";
 
+  const flush = function* (rawEvent: string): Generator<StreamDelta> {
+    const outcome = parseSseEvent(rawEvent);
+    if (outcome && outcome !== "done") yield outcome;
+  };
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -347,6 +417,14 @@ async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator
         if (outcome === "done") return;
         if (outcome) yield outcome;
       }
+    }
+
+    // Some gateways close the stream after the final usage event without a
+    // trailing blank line, leaving it unterminated in `buffer`. Emit it so the
+    // final `usage` chunk (which carries the turn's real `prompt_tokens`) is not
+    // silently dropped — that loss is what makes the context badge under-report.
+    if (buffer.trim().length > 0) {
+      yield* flush(buffer);
     }
   } finally {
     reader.releaseLock();
@@ -405,20 +483,4 @@ function supportsVision(obj: Record<string, unknown>): boolean | undefined {
     return true;
   }
   return undefined;
-}
-
-/** Node's fetch honors this env var to disable TLS verification for the process. */
-async function withInsecureTls<T>(allow: boolean | undefined, fn: () => Promise<T>): Promise<T> {
-  if (!allow) {
-    return fn();
-  }
-  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-  return fn().finally(() => {
-    if (previous === undefined) {
-      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    } else {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
-    }
-  });
 }

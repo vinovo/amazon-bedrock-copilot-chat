@@ -64,6 +64,19 @@ function mockFetchReturning(payload: unknown): typeof globalThis.fetch {
     }) as unknown as Response) as typeof globalThis.fetch;
 }
 
+/** Build a mock streaming `fetch` whose response body replays the given raw SSE text. */
+function mockFetchStreaming(sse: string): typeof globalThis.fetch {
+  return (async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sse));
+        controller.close();
+      },
+    });
+    return { body, ok: true, status: 200 } as unknown as Response;
+  }) as typeof globalThis.fetch;
+}
+
 suite("Custom backend model discovery", () => {
   let originalFetch: typeof globalThis.fetch;
 
@@ -112,6 +125,82 @@ suite("Custom backend model discovery", () => {
     assert.deepStrictEqual(
       bareArray.map((model) => model.id),
       ["alpha", "beta"],
+    );
+  });
+
+  test("captures per-model context/output token limits from the OpenAI envelope", async () => {
+    globalThis.fetch = mockFetchReturning({
+      data: [
+        { id: "big", max_input_tokens: 200_000, max_output_tokens: 8192 },
+        { context_length: 1_000_000, id: "huge", max_tokens: 32_000 },
+        { id: "bare" },
+      ],
+    });
+    const client = new CustomBackendClient({ apiKey: "t", baseUrl: "https://example.test" });
+    const models = await client.listModels();
+
+    const byId = new Map(models.map((model) => [model.id, model]));
+    assert.strictEqual(byId.get("big")?.maxInputTokens, 200_000);
+    assert.strictEqual(byId.get("big")?.maxOutputTokens, 8192);
+    assert.strictEqual(byId.get("huge")?.maxInputTokens, 1_000_000, "falls back to context_length");
+    assert.strictEqual(byId.get("huge")?.maxOutputTokens, 32_000, "falls back to max_tokens");
+    assert.strictEqual(byId.get("bare")?.maxInputTokens, undefined);
+    assert.strictEqual(byId.get("bare")?.maxOutputTokens, undefined);
+  });
+});
+
+suite("Custom backend streaming", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  setup(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  teardown(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  async function collect(sse: string) {
+    globalThis.fetch = mockFetchStreaming(sse);
+    const client = new CustomBackendClient({ apiKey: "t", baseUrl: "https://example.test" });
+    const deltas = [];
+    for await (const delta of client.streamChat({ messages: [], model: "m", stream: true })) {
+      deltas.push(delta);
+    }
+    return deltas;
+  }
+
+  test("yields content deltas and captures the trailing usage chunk", async () => {
+    const deltas = await collect(
+      [
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "Hello" } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: " world" } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [], usage: { completion_tokens: 5, prompt_tokens: 1234 } })}\n\n`,
+        `data: [DONE]\n\n`,
+      ].join(""),
+    );
+
+    assert.deepStrictEqual(
+      deltas.flatMap((d) => (d.content ? [d.content] : [])),
+      ["Hello", " world"],
+    );
+    const usageDelta = deltas.find((d) => d.usage);
+    assert.deepStrictEqual(usageDelta?.usage, { completionTokens: 5, promptTokens: 1234 });
+  });
+
+  test("recovers the final usage chunk when the stream ends without a trailing blank line", async () => {
+    // No `\n\n` after the usage event and no `[DONE]`: the event would be lost
+    // if the parser did not flush its trailing buffer.
+    const deltas = await collect(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n` +
+        `data: ${JSON.stringify({ choices: [], usage: { completion_tokens: 7, prompt_tokens: 999 } })}`,
+    );
+
+    const usageDelta = deltas.find((d) => d.usage);
+    assert.deepStrictEqual(
+      usageDelta?.usage,
+      { completionTokens: 7, promptTokens: 999 },
+      "trailing usage event must be flushed when the stream closes unterminated",
     );
   });
 });

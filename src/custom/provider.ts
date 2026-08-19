@@ -17,23 +17,46 @@ import {
   type StreamDelta,
 } from "./client";
 import { convertMessages, convertTools } from "./converter";
-import { type CustomBackendSettings, getCustomBackendSettings, toBackendConfig } from "./settings";
+import {
+  type CustomBackendSettings,
+  DEFAULT_MAX_INPUT_TOKENS,
+  parseBackendSettings,
+  toBackendConfig,
+} from "./settings";
 
 type CustomLanguageModelChatInformation = LanguageModelChatInformation & {
   readonly category?: { label: string; order: number };
   readonly isUserSelectable?: boolean;
+  /**
+   * The backend group's raw configuration (baseUrl/apiKey/...), embedded at
+   * discovery time so VS Code round-trips it back to
+   * {@link CustomChatModelProvider.provideLanguageModelChatResponse} as
+   * `model.configuration` — the response options only carry per-model
+   * `modelConfiguration`, never the group config.
+   */
+  readonly configuration?: Record<string, unknown>;
 };
 
 const CUSTOM_MODEL_PICKER_CATEGORY = { label: "Custom Backend", order: 60 } as const;
 
 /**
- * Sentinel model surfaced when the backend is unconfigured or unreachable, so
- * the picker keeps a Custom entry visible (mirrors the Bedrock provider's
- * behavior) instead of silently reverting the user's selection.
+ * Sentinel model surfaced when a configured backend is unreachable, so the
+ * picker keeps a visible entry (mirrors the Bedrock provider's behavior)
+ * instead of silently reverting the user's selection.
  */
 export const CUSTOM_ERROR_SENTINEL_ID = "__custom_error_sentinel__";
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * Options passed to {@link CustomChatModelProvider.provideLanguageModelChatInformation}.
+ * The pinned proposed API only types `configuration`; `silent` is present at
+ * runtime but not in the d.ts, so it is declared here defensively.
+ */
+type PrepareOptions = {
+  readonly configuration?: Record<string, unknown>;
+  readonly silent?: boolean;
+};
 
 export class CustomChatModelProvider implements vscode.Disposable, LanguageModelChatProvider {
   private static readonly CONTEXT_SELECTION_KEY = "custom.contextSelection";
@@ -43,10 +66,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
 
   private readonly client = new CustomBackendClient({ apiKey: "", baseUrl: "" });
 
-  constructor(
-    private readonly secrets: vscode.SecretStorage,
-    private readonly globalState: vscode.Memento,
-  ) {}
+  constructor(private readonly globalState: vscode.Memento) {}
 
   dispose(): void {
     this._onDidChange.dispose();
@@ -59,19 +79,17 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
   }
 
   async provideLanguageModelChatInformation(
-    options: { silent: boolean },
+    options: PrepareOptions,
     token: CancellationToken,
   ): Promise<LanguageModelChatInformation[]> {
-    const settings = await getCustomBackendSettings(this.secrets);
+    const settings = parseBackendSettings(options.configuration);
     const config = toBackendConfig(settings);
 
+    // No configuration yet (no group added, or missing required fields): return
+    // nothing so VS Code shows its native "add a backend" affordance rather
+    // than a bogus error entry.
     if (!config) {
-      if (!options.silent) {
-        vscode.window.showInformationMessage(
-          "Custom backend is not configured. Run 'Manage Custom Model Provider' to set a base URL and access token.",
-        );
-      }
-      return this.buildSentinel("Backend not configured (missing base URL or access token)");
+      return [];
     }
 
     this.client.setConfig(config);
@@ -79,19 +97,19 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     try {
       const models = await this.resolveModels(settings, token);
       if (models.length === 0) {
-        return this.buildSentinel("No models discovered and none configured manually");
+        return this.buildSentinel(settings, "No models discovered and none configured manually");
       }
-      return models;
+      // Embed the backend group config in each model so it round-trips back to
+      // `provideLanguageModelChatResponse`, which only receives per-model
+      // `modelConfiguration` from VS Code, never the group's `configuration`.
+      return models.map((model) => ({ ...model, configuration: options.configuration }));
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return [];
       }
       const message = error instanceof Error ? error.message : String(error);
-      if (!options.silent) {
-        vscode.window.showErrorMessage(`Failed to load custom backend models: ${message}`);
-      }
       logger.error("[Custom Provider] Failed to load models", error);
-      return this.buildSentinel(message);
+      return this.buildSentinel(settings, message);
     }
   }
 
@@ -105,11 +123,18 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     if (model.id === CUSTOM_ERROR_SENTINEL_ID) {
       const reason = (model as CustomLanguageModelChatInformation).detail ?? "unknown error";
       throw new Error(
-        `Custom backend is unavailable: ${reason}. Run 'Manage Custom Model Provider', then re-open the model picker.`,
+        `Custom backend is unavailable: ${reason}. Reconfigure the backend, then re-open the model picker.`,
       );
     }
 
-    const settings = await getCustomBackendSettings(this.secrets);
+    // The backend group config (baseUrl/apiKey/...) is embedded in the model at
+    // discovery time and round-tripped here as `model.configuration`. VS Code's
+    // `options.modelConfiguration` only carries per-model schema values (e.g.
+    // the context-size picker), so the group config must come from the model.
+    const modelConfig = options.modelConfiguration as Record<string, unknown> | undefined;
+    const settings = parseBackendSettings(
+      (model as CustomLanguageModelChatInformation).configuration,
+    );
     const config = toBackendConfig(settings);
     if (!config) {
       throw new Error("Custom backend is not configured (missing base URL or access token).");
@@ -118,13 +143,12 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
 
     // Persist a new context-size picker selection, then refresh the model
     // list so the badge denominator updates on the next turn.
-    const rawContextSize = (options.modelConfiguration as Record<string, unknown> | undefined)
-      ?.contextSize;
+    const rawContextSize = modelConfig?.contextSize;
     const pickedContext = typeof rawContextSize === "number" ? rawContextSize : undefined;
     if (typeof pickedContext === "number" && Number.isFinite(pickedContext)) {
-      const stored = this.getPersistedContextSize(model.id);
+      const stored = this.getPersistedContextSize(settings, model.id);
       if (pickedContext !== stored) {
-        await this.persistContextSize(model.id, pickedContext);
+        await this.persistContextSize(settings, model.id, pickedContext);
         this.notifyModelInformationChanged("context size changed");
       }
     }
@@ -160,11 +184,22 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         logger.info("[Custom Provider] Request cancelled by user");
         return;
       }
-      logger.error("[Custom Provider] Chat request failed", {
-        error: error instanceof Error ? error.message : String(error),
-        modelId: model.id,
-        status: error instanceof CustomBackendError ? error.status : undefined,
-      });
+      const status = error instanceof CustomBackendError ? error.status : undefined;
+      if (status === 401) {
+        // The key has likely expired. We cannot refresh it (interactive OIDC),
+        // so log a clear hint. Per requirements, this is not surfaced to the UI.
+        logger.error(
+          "[Custom Provider] Authentication failed (401): the backend rejected the API key. " +
+            "It may have expired — re-issue it (e.g. run `breeze aws auth`) and update the backend's key.",
+          { modelId: model.id },
+        );
+      } else {
+        logger.error("[Custom Provider] Chat request failed", {
+          error: error instanceof Error ? error.message : String(error),
+          modelId: model.id,
+          status,
+        });
+      }
       throw error;
     } finally {
       cancellation.dispose();
@@ -194,11 +229,21 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
   }
 
   private buildModelInfo(
+    settings: CustomBackendSettings,
     id: string,
-    defaultMaxInputTokens: number,
-    caps?: { toolCalling?: boolean; vision?: boolean },
+    caps?: {
+      maxInputTokens?: number;
+      maxOutputTokens?: number;
+      toolCalling?: boolean;
+      vision?: boolean;
+    },
   ): CustomLanguageModelChatInformation {
-    const maxInputTokens = this.getPersistedContextSize(id) ?? defaultMaxInputTokens;
+    // Precedence for the context window: user's context-size override →
+    // backend-reported per-model limit → group's configured fallback → default.
+    const reported = caps?.maxInputTokens;
+    const fallback = reported ?? settings.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
+    const maxInputTokens = this.getPersistedContextSize(settings, id) ?? fallback;
+    const maxOutputTokens = caps?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     // The property key MUST be `contextSize`: VS Code's context-usage badge reads the window
     // denominator from `modelConfiguration.contextSize` / `properties.contextSize.default`.
     const contextSizeSchema = {
@@ -221,34 +266,44 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         imageInput: caps?.vision ?? false,
         toolCalling: caps?.toolCalling ?? true,
       },
-      category: CUSTOM_MODEL_PICKER_CATEGORY,
+      category: this.pickerCategory(settings),
       configurationSchema: { properties: { contextSize: contextSizeSchema } },
       family: "custom",
       id,
       isUserSelectable: true,
       maxInputTokens,
-      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
       name: id,
-      tooltip: `Custom backend model: ${id}`,
+      tooltip: `${settings.name ?? "Custom backend"} model: ${id}`,
       version: "1.0.0",
     };
   }
 
-  private buildSentinel(detail: string): LanguageModelChatInformation[] {
+  private buildSentinel(
+    settings: CustomBackendSettings,
+    detail: string,
+  ): LanguageModelChatInformation[] {
     const sentinel: CustomLanguageModelChatInformation = {
       capabilities: { imageInput: false, toolCalling: false },
-      category: CUSTOM_MODEL_PICKER_CATEGORY,
+      category: this.pickerCategory(settings),
       detail,
       family: "custom",
       id: CUSTOM_ERROR_SENTINEL_ID,
       isUserSelectable: true,
       maxInputTokens: 1,
       maxOutputTokens: 1,
-      name: "⚠ Custom backend unavailable",
+      name: `⚠ ${settings.name ?? "Custom backend"} unavailable`,
       tooltip: detail,
       version: "1.0.0",
     };
     return [sentinel];
+  }
+
+  /** Picker category labeled with the backend's friendly name, when set. */
+  private pickerCategory(settings: CustomBackendSettings): { label: string; order: number } {
+    return settings.name
+      ? { label: settings.name, order: CUSTOM_MODEL_PICKER_CATEGORY.order }
+      : CUSTOM_MODEL_PICKER_CATEGORY;
   }
 
   private flushToolCalls(
@@ -271,22 +326,29 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     }
   }
 
-  private getPersistedContextSize(modelId: string): number | undefined {
+  private getPersistedContextSize(
+    settings: CustomBackendSettings,
+    modelId: string,
+  ): number | undefined {
     const map = this.globalState.get<Record<string, number>>(
       CustomChatModelProvider.CONTEXT_SELECTION_KEY,
       {},
     );
-    const value = map[modelId];
+    const value = map[contextSelectionKey(settings, modelId)];
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
   }
 
-  private async persistContextSize(modelId: string, maxInputTokens: number): Promise<void> {
+  private async persistContextSize(
+    settings: CustomBackendSettings,
+    modelId: string,
+    maxInputTokens: number,
+  ): Promise<void> {
     const map = {
       ...this.globalState.get<Record<string, number>>(
         CustomChatModelProvider.CONTEXT_SELECTION_KEY,
         {},
       ),
-      [modelId]: maxInputTokens,
+      [contextSelectionKey(settings, modelId)]: maxInputTokens,
     };
     await this.globalState.update(CustomChatModelProvider.CONTEXT_SELECTION_KEY, map);
   }
@@ -295,9 +357,12 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     usage: undefined | { completionTokens?: number; promptTokens?: number },
     progress: Progress<LanguageModelResponsePart>,
   ): void {
-    if (usage?.promptTokens === undefined || usage.completionTokens === undefined) return;
+    // The prompt count is the dominant term in the badge numerator; report as
+    // long as it is known, defaulting completion to 0 rather than suppressing
+    // the whole report when a backend omits `completion_tokens`.
+    if (usage?.promptTokens === undefined) return;
     try {
-      const completionTokens = usage.completionTokens;
+      const completionTokens = usage.completionTokens ?? 0;
       const promptTokens = usage.promptTokens;
       progress.report(
         vscode.LanguageModelDataPart.json(
@@ -332,12 +397,14 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     try {
       // Manual model list, when provided, is authoritative and skips discovery.
       if (settings.models.length > 0) {
-        return settings.models.map((id) => this.buildModelInfo(id, settings.maxInputTokens));
+        return settings.models.map((id) => this.buildModelInfo(settings, id));
       }
 
       const discovered = await this.client.listModels(abortController.signal);
       return discovered.map((m) =>
-        this.buildModelInfo(m.id, settings.maxInputTokens, {
+        this.buildModelInfo(settings, m.id, {
+          maxInputTokens: m.maxInputTokens,
+          maxOutputTokens: m.maxOutputTokens,
           toolCalling: m.toolCalling,
           vision: m.vision,
         }),
@@ -353,7 +420,13 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     signal: AbortSignal,
   ): Promise<void> {
     const toolAccumulators = new Map<number, { args: string; id: string; name: string }>();
-    let lastUsage: undefined | { completionTokens?: number; promptTokens?: number };
+    // Accumulate usage field-by-field rather than replacing wholesale: gateways
+    // may split `prompt_tokens` and `completion_tokens` across chunks, or send a
+    // partial usage object mid-stream. Keeping the last defined value of each
+    // field ensures the final report carries the turn's full prompt size, which
+    // is what VS Code's context badge treats as the (absolute) numerator.
+    const usage: { completionTokens?: number; promptTokens?: number } = {};
+    let sawUsage = false;
 
     for await (const delta of this.client.streamChat(request, signal)) {
       if (delta.content) {
@@ -365,7 +438,14 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         }
       }
       if (delta.usage) {
-        lastUsage = delta.usage;
+        if (delta.usage.promptTokens !== undefined) {
+          usage.promptTokens = delta.usage.promptTokens;
+          sawUsage = true;
+        }
+        if (delta.usage.completionTokens !== undefined) {
+          usage.completionTokens = delta.usage.completionTokens;
+          sawUsage = true;
+        }
       }
     }
 
@@ -376,7 +456,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     // payload follows the OpenAI APIUsage shape. Copilot Chat ≥ 1.120.0
     // consumes this and updates the badge numerator accordingly.
     // See: https://github.com/microsoft/vscode/pull/315394
-    this.reportUsage(lastUsage, progress);
+    this.reportUsage(sawUsage ? usage : undefined, progress);
   }
 }
 
@@ -384,4 +464,12 @@ function mapToolChoice(
   mode: undefined | vscode.LanguageModelChatToolMode,
 ): ChatCompletionRequest["tool_choice"] {
   return mode === vscode.LanguageModelChatToolMode.Required ? "required" : "auto";
+}
+
+/**
+ * Namespace context-size overrides by backend so the same model id at
+ * different backends does not share a stored value.
+ */
+function contextSelectionKey(settings: CustomBackendSettings, modelId: string): string {
+  return `${settings.baseUrl ?? ""}::${modelId}`;
 }

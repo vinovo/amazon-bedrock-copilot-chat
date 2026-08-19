@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/vinovo/amazon-bedrock-copilot-chat"
   },
-  "version": "0.16.7",
+  "version": "0.17.1",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -37,7 +37,64 @@
       {
         "vendor": "custom",
         "displayName": "Custom Backend",
-        "managementCommand": "custom.manage"
+        "configuration": {
+          "type": "object",
+          "required": [
+            "baseUrl"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Friendly name for this backend, shown as its heading in the model picker. Defaults to the group name if left empty."
+            },
+            "baseUrl": {
+              "type": "string",
+              "description": "Base URL of an OpenAI-compatible backend (e.g. https://gateway.example.com). A trailing '/v1' is optional."
+            },
+            "apiKey": {
+              "type": "string",
+              "secret": true,
+              "description": "Access token / API key sent as a Bearer token. Stored securely in VS Code SecretStorage."
+            },
+            "models": {
+              "type": "array",
+              "description": "Explicit model IDs to expose. Leave empty to auto-discover via GET /v1/models.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Model ID as accepted by the backend."
+                  }
+                }
+              },
+              "defaultSnippets": [
+                {
+                  "body": [
+                    {
+                      "id": "$1"
+                    }
+                  ]
+                }
+              ]
+            },
+            "maxInputTokens": {
+              "type": "number",
+              "description": "Fallback context window size (input tokens) advertised when the backend does not report per-model limits. Defaults to 128000."
+            },
+            "allowInsecureTls": {
+              "type": "boolean",
+              "description": "Skip TLS certificate verification. Enable only for trusted backends with a private/self-signed CA. Prefer 'caBundlePath' instead."
+            },
+            "caBundlePath": {
+              "type": "string",
+              "description": "Optional path to a PEM CA bundle to trust for TLS (e.g. a corporate proxy CA). Leave empty if the backend uses a publicly-trusted certificate."
+            }
+          }
+        }
       }
     ],
     "commands": [
@@ -45,11 +102,6 @@
         "command": "bedrock.manage",
         "category": "Bedrock Provider",
         "title": "Manage Amazon Bedrock"
-      },
-      {
-        "command": "custom.manage",
-        "category": "Bedrock Provider",
-        "title": "Manage Custom Backend"
       }
     ],
     "configuration": [
@@ -140,39 +192,6 @@
             "scope": "resource"
           }
         }
-      },
-      {
-        "title": "Custom Backend",
-        "properties": {
-          "custom.baseUrl": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "default": null,
-            "description": "Base URL of an OpenAI-compatible backend (e.g. https://gateway.example.com). A trailing '/v1' is optional. Set the access token via the 'Manage Custom Model Provider' command.",
-            "scope": "resource"
-          },
-          "custom.models": {
-            "type": "string",
-            "default": "",
-            "description": "Comma-separated model IDs to expose from the custom backend. Leave empty to auto-discover models via the backend's GET /v1/models endpoint.",
-            "scope": "resource"
-          },
-          "custom.allowInsecureTls": {
-            "type": "boolean",
-            "default": false,
-            "description": "Skip TLS certificate verification when calling the custom backend. Enable only for trusted backends that use a private/self-signed certificate authority.",
-            "scope": "resource"
-          },
-          "custom.maxInputTokens": {
-            "type": "number",
-            "default": 128000,
-            "minimum": 1024,
-            "description": "Context window size (input tokens) advertised for all custom backend models. This sets the denominator in the context-window tracker. Adjust to match your model's actual context limit (e.g. 32000, 128000, 200000).",
-            "scope": "resource"
-          }
-        }
       }
     ]
   },
@@ -212,7 +231,8 @@
     "@microsoft/tiktokenizer": "^1.0.10",
     "@smithy/shared-ini-file-loader": "^4.4.8",
     "@smithy/util-retry": "^4.3.1",
-    "smithy-node-native-fetch": "^1.2.1"
+    "smithy-node-native-fetch": "^1.2.1",
+    "undici": "^8.10.0"
   },
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "4.7.1",
