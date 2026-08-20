@@ -451,6 +451,86 @@ suite("Amazon Bedrock Chat Provider Extension", () => {
     });
   });
 
+  suite("utils/convertMessages prompt caching", () => {
+    const CLAUDE_NO_THINKING = "anthropic.claude-3-5-sonnet";
+
+    // Count content-block cache points on a message.
+    const cachePoints = (content: readonly any[] | undefined): number =>
+      (content ?? []).filter((b) => b?.cachePoint !== undefined).length;
+
+    const userMsg = (text: string): vscode.LanguageModelChatMessage => ({
+      content: [new vscode.LanguageModelTextPart(text)],
+      name: undefined,
+      role: vscode.LanguageModelChatMessageRole.User,
+    });
+
+    const assistantMsg = (text: string): vscode.LanguageModelChatMessage => ({
+      content: [new vscode.LanguageModelTextPart(text)],
+      name: undefined,
+      role: vscode.LanguageModelChatMessageRole.Assistant,
+    });
+
+    test("adds no cache points when caching is disabled", () => {
+      const out = convertMessages([userMsg("a"), userMsg("b")], CLAUDE_NO_THINKING, {
+        promptCachingEnabled: false,
+      });
+      const total = out.messages.reduce((n, m) => n + cachePoints(m.content), 0);
+      assert.equal(total, 0);
+    });
+
+    test("caches recent user turns up to the full budget when no system block", () => {
+      // Interleave assistant turns so the user messages are not merged.
+      const messages: vscode.LanguageModelChatMessage[] = [
+        userMsg("turn 1"),
+        assistantMsg("a1"),
+        userMsg("turn 2"),
+        assistantMsg("a2"),
+        userMsg("turn 3"),
+        assistantMsg("a3"),
+        userMsg("turn 4"),
+        assistantMsg("a4"),
+        userMsg("turn 5"),
+      ];
+      const out = convertMessages(messages, CLAUDE_NO_THINKING, { promptCachingEnabled: true });
+      const userCachePoints = out.messages
+        .filter((m) => m.role === "user")
+        .reduce((n, m) => n + cachePoints(m.content), 0);
+      // No system block → full budget of 4 spent on the 4 most recent user turns.
+      assert.equal(userCachePoints, 4);
+      // The oldest of 5 user turns falls outside the window and is not cached.
+      assert.equal(cachePoints(out.messages[0].content), 0, "oldest turn should not be cached");
+    });
+
+    test("never exceeds Bedrock's 4-cache-point cap including the system block", () => {
+      // The public LanguageModelChatMessageRole enum has only User/Assistant;
+      // the converter routes any other role to system content, so use a
+      // non-User/Assistant role value to simulate a system message.
+      const system: vscode.LanguageModelChatMessage = {
+        content: [new vscode.LanguageModelTextPart("system preamble")],
+        name: undefined,
+        role: 3 as unknown as vscode.LanguageModelChatMessageRole,
+      };
+      // Interleave assistant turns so user messages are not merged into one.
+      const messages = [
+        system,
+        userMsg("t1"),
+        assistantMsg("a1"),
+        userMsg("t2"),
+        assistantMsg("a2"),
+        userMsg("t3"),
+        assistantMsg("a3"),
+        userMsg("t4"),
+      ];
+      const out = convertMessages(messages, CLAUDE_NO_THINKING, { promptCachingEnabled: true });
+      const systemPoints = out.system.filter((b: any) => b?.cachePoint !== undefined).length;
+      const messagePoints = out.messages.reduce((n, m) => n + cachePoints(m.content), 0);
+      assert.equal(systemPoints, 1, "system block should carry one cache point");
+      // system(1) + messages(<=3) must not exceed 4.
+      assert.ok(systemPoints + messagePoints <= 4, `total ${systemPoints + messagePoints} > 4`);
+      assert.equal(messagePoints, 3, "remaining budget of 3 spent on recent user turns");
+    });
+  });
+
   suite("utils/stripThinkingContent", () => {
     test("strips reasoningContent blocks from messages", () => {
       const messages = [

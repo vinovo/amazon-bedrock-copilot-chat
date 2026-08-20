@@ -78554,6 +78554,41 @@ class CustomBackendClient {
     });
     return models;
   }
+  async fetchReasoningSupport(signal) {
+    const support = new Map;
+    let response;
+    try {
+      response = await fetch(this.endpoint("/model/info"), {
+        dispatcher: this.dispatcher(),
+        headers: this.headers(),
+        signal
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError")
+        throw error;
+      return support;
+    }
+    if (!response.ok)
+      return support;
+    let json;
+    try {
+      json = await response.json();
+    } catch {
+      return support;
+    }
+    for (const entry of extractModelList(json)) {
+      if (!entry || typeof entry !== "object")
+        continue;
+      const obj = entry;
+      const id = extractModelId(obj);
+      const info = obj.model_info;
+      const supports = info?.supports_reasoning ?? obj.supports_reasoning;
+      if (id && typeof supports === "boolean") {
+        support.set(id, supports);
+      }
+    }
+    return support;
+  }
   setConfig(config) {
     this.config = config;
   }
@@ -78729,8 +78764,10 @@ function parseModelList(json) {
       seen.add(id);
       models.push({
         id,
+        aliases: extractAliases(obj, id),
         maxInputTokens: numericField(obj, ["max_input_tokens", "context_length", "context_window"]),
         maxOutputTokens: numericField(obj, ["max_output_tokens", "max_tokens"]),
+        reasoning: supportsReasoning(obj),
         toolCalling: supportsTools(obj),
         vision: supportsVision(obj)
       });
@@ -78810,10 +78847,21 @@ function parseToolCallDeltas(toolCalls) {
 function parseUsage(usage) {
   if (!usage)
     return;
+  const details = usage.prompt_tokens_details;
+  const openAiCached = numberOrUndefined(details?.cached_tokens);
+  const externalCachedRead = numberOrUndefined(details?.cache_read_tokens) ?? numberOrUndefined(usage.cache_read_input_tokens) ?? numberOrUndefined(usage.cache_read_tokens);
+  const cachedTokens = openAiCached ?? externalCachedRead;
+  const cacheWriteTokens = numberOrUndefined(details?.cache_write_tokens) ?? numberOrUndefined(usage.cache_creation_input_tokens) ?? numberOrUndefined(usage.cache_creation_tokens);
   return {
-    completionTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
-    promptTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined
+    cacheWriteTokens,
+    cachedTokens,
+    completionTokens: numberOrUndefined(usage.completion_tokens),
+    promptIncludesCached: openAiCached !== undefined,
+    promptTokens: numberOrUndefined(usage.prompt_tokens)
   };
+}
+function numberOrUndefined(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 async function safeText(response) {
   try {
@@ -78822,6 +78870,38 @@ async function safeText(response) {
   } catch {
     return "<no body>";
   }
+}
+function extractAliases(obj, primaryId) {
+  const aliases = new Set;
+  for (const key of ["model", "name", "model_name"]) {
+    const value = obj[key];
+    if (typeof value === "string" && value && value !== primaryId) {
+      aliases.add(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string" && item && item !== primaryId)
+          aliases.add(item);
+      }
+    }
+  }
+  return aliases.size > 0 ? [...aliases] : undefined;
+}
+function supportsReasoning(obj) {
+  const info = obj.model_info;
+  if (info && typeof info.supports_reasoning === "boolean") {
+    return info.supports_reasoning;
+  }
+  if (typeof obj.supports_reasoning === "boolean") {
+    return obj.supports_reasoning;
+  }
+  const modelType = obj.model_type;
+  if (modelType && typeof modelType.is_reasoning === "boolean") {
+    return modelType.is_reasoning;
+  }
+  if (hasCapability(obj, "reasoning") || hasCapability(obj, "thinking")) {
+    return true;
+  }
+  return;
 }
 function supportsTools(obj) {
   const modelType = obj.model_type;
@@ -78865,6 +78945,68 @@ function convertMessages(messages) {
     }
   }
   return result.filter((msg) => isNonEmptyMessage(msg));
+}
+var MAX_CACHE_BREAKPOINTS = 4;
+function addCacheBreakpoints(messages) {
+  let remaining = MAX_CACHE_BREAKPOINTS - countCacheBreakpoints(messages);
+  let belowCurrentUserMessage = true;
+  for (let i = messages.length - 1;i >= 0 && remaining > 0; i--) {
+    const msg = messages[i];
+    const prev = messages[i - 1];
+    if (hasCacheBreakpoint(msg)) {
+      if (msg.role === "user") {
+        belowCurrentUserMessage = false;
+      }
+      continue;
+    }
+    const isLastToolResultInRound = msg.role === "tool" && prev?.role !== "tool";
+    const isTerminalAssistant = msg.role === "assistant" && !msg.tool_calls?.length;
+    const shouldMark = belowCurrentUserMessage && (isLastToolResultInRound || msg.role === "user") || isTerminalAssistant;
+    if (shouldMark && markCacheBreakpoint(msg)) {
+      remaining--;
+    }
+    if (msg.role === "user") {
+      belowCurrentUserMessage = false;
+    }
+  }
+  for (let i = 0;i < messages.length && remaining > 0; i++) {
+    const msg = messages[i];
+    if (msg.role !== "system" && msg.role !== "user") {
+      break;
+    }
+    if (!hasCacheBreakpoint(msg) && markCacheBreakpoint(msg)) {
+      remaining--;
+    }
+  }
+}
+function hasCacheBreakpoint(msg) {
+  return Array.isArray(msg.content) && msg.content.some((part) => part.cache_control !== undefined);
+}
+function countCacheBreakpoints(messages) {
+  let count = 0;
+  for (const msg of messages) {
+    if (Array.isArray(msg.content)) {
+      count += msg.content.filter((part) => part.cache_control !== undefined).length;
+    }
+  }
+  return count;
+}
+function markCacheBreakpoint(msg) {
+  if (hasCacheBreakpoint(msg)) {
+    return false;
+  }
+  if (typeof msg.content === "string") {
+    if (msg.content.length === 0) {
+      return false;
+    }
+    msg.content = [{ text: msg.content, type: "text" }];
+  }
+  if (!Array.isArray(msg.content) || msg.content.length === 0) {
+    return false;
+  }
+  const last = msg.content[msg.content.length - 1];
+  last.cache_control = { type: "ephemeral" };
+  return true;
 }
 function convertTools(tools) {
   if (!tools || tools.length === 0) {
@@ -78979,6 +79121,117 @@ function toImagePart(part) {
       mimeType: part.mimeType
     });
     return;
+  }
+}
+
+// src/custom/reasoning.ts
+var GPT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
+var CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+var GENERIC_LEVELS = ["low", "medium", "high"];
+function defaultReasoningEffort(levels, familyId) {
+  if (levels.length === 0)
+    return;
+  const family = normalizeId(familyId);
+  const preferred = family.startsWith("claude") || family.includes("kimi") ? "high" : "medium";
+  if (levels.includes(preferred))
+    return preferred;
+  return levels[Math.floor((levels.length - 1) / 2)];
+}
+function heuristicReasoningCapability(...idsOrAliases) {
+  for (const raw of idsOrAliases) {
+    if (!raw)
+      continue;
+    const id = normalizeId(raw);
+    if (id.startsWith("gpt-5") || /^o[1-9]/.test(id)) {
+      return { format: "chat-completions", levels: GPT_LEVELS };
+    }
+    if (/^claude-([45]|opus-[45]|sonnet-[45])/.test(id) || /^claude-\d+-[45678]/.test(id)) {
+      return { format: "chat-completions", levels: CLAUDE_LEVELS };
+    }
+    if (/^gemini-(2\.5|3)/.test(id)) {
+      return { format: "chat-completions", levels: GENERIC_LEVELS };
+    }
+    if (id.includes("think")) {
+      return { format: "chat-completions", levels: GENERIC_LEVELS };
+    }
+  }
+  return;
+}
+function isClaudeFamily(...idsOrAliases) {
+  for (const raw of idsOrAliases) {
+    if (!raw)
+      continue;
+    const id = normalizeId(raw);
+    if (/^claude-([45]|opus-[45]|sonnet-[45])/.test(id) || /^claude-\d+-[3-8]/.test(id) || /^claude-3-[5-9]/.test(id)) {
+      return true;
+    }
+  }
+  return false;
+}
+function normalizeId(id) {
+  let s = id.toLowerCase();
+  const sep = s.indexOf("::");
+  if (sep !== -1)
+    s = s.slice(sep + 2);
+  const colon = s.indexOf(":");
+  if (colon !== -1)
+    s = s.slice(0, colon);
+  return s;
+}
+function reasoningEffortDescription(level) {
+  switch (level) {
+    case "high": {
+      return "Greater reasoning depth but slower";
+    }
+    case "low": {
+      return "Faster responses with less reasoning";
+    }
+    case "max": {
+      return "Absolute maximum capability with no constraints";
+    }
+    case "medium": {
+      return "Balanced reasoning and speed";
+    }
+    case "minimal": {
+      return "Minimal reasoning for fastest responses";
+    }
+    case "none": {
+      return "No reasoning applied";
+    }
+    case "xhigh": {
+      return "Highest reasoning depth but slowest";
+    }
+    default: {
+      return level;
+    }
+  }
+}
+function reasoningEffortLabel(level) {
+  switch (level) {
+    case "high": {
+      return "High";
+    }
+    case "low": {
+      return "Low";
+    }
+    case "max": {
+      return "Max";
+    }
+    case "medium": {
+      return "Medium";
+    }
+    case "minimal": {
+      return "Minimal";
+    }
+    case "none": {
+      return "None";
+    }
+    case "xhigh": {
+      return "Extra High";
+    }
+    default: {
+      return level.charAt(0).toUpperCase() + level.slice(1);
+    }
   }
 }
 
@@ -79115,6 +79368,9 @@ class CustomChatModelProvider {
         stream: true,
         stream_options: { include_usage: true }
       };
+      if (isClaudeFamily(model.id)) {
+        addCacheBreakpoints(request.messages);
+      }
       const tools = convertTools(options.tools);
       if (tools) {
         request.tools = tools;
@@ -79125,6 +79381,19 @@ class CustomChatModelProvider {
       }
       if (typeof options.modelOptions?.temperature === "number") {
         request.temperature = options.modelOptions.temperature;
+      }
+      const reasoning = model.reasoning;
+      const pickedEffort = modelConfig?.reasoningEffort;
+      if (typeof pickedEffort === "string" && reasoning) {
+        if (reasoning.levels.includes(pickedEffort)) {
+          request.reasoning_effort = pickedEffort;
+        } else {
+          logger.warn("[Custom Provider] Dropping unsupported reasoning effort", {
+            allowed: reasoning.levels,
+            modelId: model.id,
+            requested: pickedEffort
+          });
+        }
       }
       await this.streamResponse(request, progress, abortController.signal);
     } catch (error) {
@@ -79181,21 +79450,49 @@ class CustomChatModelProvider {
       group: "tokens",
       type: "number"
     };
+    const reasoning = this.resolveReasoning(id, caps);
+    const properties = { contextSize: contextSizeSchema };
+    if (reasoning) {
+      properties.reasoningEffort = this.buildReasoningEffortSchema(id, reasoning);
+    }
     return {
       capabilities: {
         imageInput: caps?.vision ?? false,
         toolCalling: caps?.toolCalling ?? true
       },
       category: this.pickerCategory(settings),
-      configurationSchema: { properties: { contextSize: contextSizeSchema } },
+      configurationSchema: { properties },
       family: "custom",
       id,
       isUserSelectable: true,
       maxInputTokens,
       maxOutputTokens,
       name: id,
+      reasoning,
       tooltip: `${settings.name ?? "Custom backend"} model: ${id}`,
       version: "1.0.0"
+    };
+  }
+  resolveReasoning(id, caps) {
+    const heuristic = heuristicReasoningCapability(id, ...caps?.aliases ?? []);
+    if (caps?.reasoning === false) {
+      return;
+    }
+    if (caps?.reasoning === true) {
+      return heuristic ?? { format: "chat-completions", levels: ["low", "medium", "high"] };
+    }
+    return heuristic;
+  }
+  buildReasoningEffortSchema(id, reasoning) {
+    const levels = reasoning.levels;
+    return {
+      default: defaultReasoningEffort(levels, id),
+      description: "How much reasoning effort the model should apply.",
+      enum: [...levels],
+      enumDescriptions: levels.map(reasoningEffortDescription),
+      enumItemLabels: levels.map(reasoningEffortLabel),
+      group: "navigation",
+      type: "string"
     };
   }
   buildSentinel(settings, detail) {
@@ -79251,16 +79548,22 @@ class CustomChatModelProvider {
       return;
     try {
       const completionTokens = usage.completionTokens ?? 0;
-      const promptTokens = usage.promptTokens;
+      const cachedTokens = usage.cachedTokens ?? 0;
+      const cacheWriteTokens = usage.cacheWriteTokens ?? 0;
+      const promptTokens = usage.promptTokens + (usage.promptIncludesCached ? 0 : cachedTokens) + cacheWriteTokens;
       progress.report(vscode6.LanguageModelDataPart.json({
         completion_tokens: completionTokens,
         prompt_tokens: promptTokens,
-        prompt_tokens_details: { cached_tokens: 0 },
+        prompt_tokens_details: { cached_tokens: cachedTokens },
         total_tokens: promptTokens + completionTokens
       }, "usage"));
       logger.debug("[Custom Provider] Reported token usage", {
+        cacheWriteTokens,
+        cachedTokens,
         completionTokens,
+        promptIncludesCached: usage.promptIncludesCached ?? false,
         promptTokens,
+        rawPromptTokens: usage.promptTokens,
         totalTokens: promptTokens + completionTokens
       });
     } catch (error) {
@@ -79277,9 +79580,12 @@ class CustomChatModelProvider {
         return settings.models.map((id) => this.buildModelInfo(settings, id));
       }
       const discovered = await this.client.listModels(abortController.signal);
+      const reasoningSupport = await this.client.fetchReasoningSupport(abortController.signal);
       return discovered.map((m) => this.buildModelInfo(settings, m.id, {
+        aliases: m.aliases,
         maxInputTokens: m.maxInputTokens,
         maxOutputTokens: m.maxOutputTokens,
+        reasoning: reasoningSupport.get(m.id) ?? m.reasoning,
         toolCalling: m.toolCalling,
         vision: m.vision
       }));
@@ -79308,6 +79614,17 @@ class CustomChatModelProvider {
         if (delta.usage.completionTokens !== undefined) {
           usage.completionTokens = delta.usage.completionTokens;
           sawUsage = true;
+        }
+        if (delta.usage.cachedTokens !== undefined) {
+          usage.cachedTokens = delta.usage.cachedTokens;
+          sawUsage = true;
+        }
+        if (delta.usage.cacheWriteTokens !== undefined) {
+          usage.cacheWriteTokens = delta.usage.cacheWriteTokens;
+          sawUsage = true;
+        }
+        if (delta.usage.promptIncludesCached !== undefined) {
+          usage.promptIncludesCached = delta.usage.promptIncludesCached;
         }
       }
     }
@@ -80215,21 +80532,21 @@ function stripThinkingContent(messages) {
 function addPromptCachingPoints(profile, systemMessages, bedrockMessages, userMessageIndicesWithToolResults) {
   if (!profile.supportsPromptCaching)
     return;
+  const MAX_CACHE_POINTS = 4;
+  let messageBudget = MAX_CACHE_POINTS;
   if (systemMessages.length > 0) {
     systemMessages.push({ cachePoint: { type: import_client_bedrock_runtime2.CachePointType.DEFAULT } });
+    messageBudget--;
   }
   let indicesToCache = [];
-  if (profile.supportsCachingWithToolResults && userMessageIndicesWithToolResults.length > 0) {
-    indicesToCache = userMessageIndicesWithToolResults.slice(-2);
-    logger.debug(`[Message Converter] Adding cache points to last ${indicesToCache.length} messages with tool results (indices: ${indicesToCache.join(", ")})`);
-  } else if (!profile.supportsCachingWithToolResults) {
-    const userMessagesWithoutToolResults = [];
-    for (const [i, message] of bedrockMessages.entries()) {
-      if (message?.role === import_client_bedrock_runtime2.ConversationRole.USER && !userMessageIndicesWithToolResults.includes(i)) {
-        userMessagesWithoutToolResults.push(i);
-      }
-    }
-    indicesToCache = userMessagesWithoutToolResults.slice(-2);
+  if (profile.supportsCachingWithToolResults) {
+    const preferred = userMessageIndicesWithToolResults;
+    const recentUsers = collectUserMessageIndices(bedrockMessages);
+    indicesToCache = (preferred.length > 0 ? preferred : recentUsers).slice(-messageBudget);
+    logger.debug(`[Message Converter] Adding cache points to last ${indicesToCache.length} recent user messages (indices: ${indicesToCache.join(", ")})`);
+  } else {
+    const withoutToolResults = collectUserMessageIndices(bedrockMessages).filter((i) => !userMessageIndicesWithToolResults.includes(i));
+    indicesToCache = withoutToolResults.slice(-messageBudget);
     if (indicesToCache.length > 0) {
       logger.debug(`[Message Converter] Adding cache points to last ${indicesToCache.length} messages without tool results (indices: ${indicesToCache.join(", ")})`);
     }
@@ -80240,6 +80557,15 @@ function addPromptCachingPoints(profile, systemMessages, bedrockMessages, userMe
       message.content.push({ cachePoint: { type: import_client_bedrock_runtime2.CachePointType.DEFAULT } });
     }
   }
+}
+function collectUserMessageIndices(bedrockMessages) {
+  const indices = [];
+  for (const [i, message] of bedrockMessages.entries()) {
+    if (message?.role === import_client_bedrock_runtime2.ConversationRole.USER) {
+      indices.push(i);
+    }
+  }
+  return indices;
 }
 function detectToolResultError(textContent) {
   const lowerContent = textContent.toLowerCase();
@@ -82366,5 +82692,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=DA18A7F2A944065C64756E2164756E21
+//# debugId=F9806E122A6B6D7164756E2164756E21
 //# sourceMappingURL=extension.js.map

@@ -15,8 +15,18 @@ import {
   CustomBackendClient,
   CustomBackendError,
   type StreamDelta,
+  type TokenUsage,
 } from "./client";
-import { convertMessages, convertTools } from "./converter";
+import { addCacheBreakpoints, convertMessages, convertTools } from "./converter";
+import {
+  defaultReasoningEffort,
+  heuristicReasoningCapability,
+  isClaudeFamily,
+  type ReasoningCapability,
+  reasoningEffortDescription,
+  reasoningEffortLabel,
+  type ReasoningEffortLevel,
+} from "./reasoning";
 import {
   type CustomBackendSettings,
   DEFAULT_MAX_INPUT_TOKENS,
@@ -35,6 +45,13 @@ type CustomLanguageModelChatInformation = LanguageModelChatInformation & {
    * `modelConfiguration`, never the group config.
    */
   readonly configuration?: Record<string, unknown>;
+  /**
+   * Resolved reasoning-effort capability for this model, embedded at discovery
+   * so it round-trips to {@link CustomChatModelProvider.provideLanguageModelChatResponse}
+   * (VS Code re-supplies the whole information object). Absent when the model is
+   * not reasoning-capable.
+   */
+  readonly reasoning?: ReasoningCapability;
 };
 
 const CUSTOM_MODEL_PICKER_CATEGORY = { label: "Custom Backend", order: 60 } as const;
@@ -166,6 +183,15 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         stream_options: { include_usage: true },
       };
 
+      // Copilot never sends cache breakpoints to `custom`-vendor providers
+      // (issue #313920), so add them ourselves for Claude models — the only
+      // family on our backends (breeze/LiteLLM, QGenie) that supports prompt
+      // caching. LiteLLM forwards `cache_control` to Anthropic; other backends
+      // ignore the unknown field.
+      if (isClaudeFamily(model.id)) {
+        addCacheBreakpoints(request.messages);
+      }
+
       const tools = convertTools(options.tools);
       if (tools) {
         request.tools = tools;
@@ -176,6 +202,23 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       }
       if (typeof options.modelOptions?.temperature === "number") {
         request.temperature = options.modelOptions.temperature;
+      }
+
+      // Forward the picked reasoning effort only when the model declared it and
+      // the value is within the declared set — mirrors Copilot, which scrubs any
+      // effort a model didn't advertise rather than passing it through blindly.
+      const reasoning = (model as CustomLanguageModelChatInformation).reasoning;
+      const pickedEffort = modelConfig?.reasoningEffort;
+      if (typeof pickedEffort === "string" && reasoning) {
+        if ((reasoning.levels as readonly string[]).includes(pickedEffort)) {
+          request.reasoning_effort = pickedEffort as ReasoningEffortLevel;
+        } else {
+          logger.warn("[Custom Provider] Dropping unsupported reasoning effort", {
+            allowed: reasoning.levels,
+            modelId: model.id,
+            requested: pickedEffort,
+          });
+        }
       }
 
       await this.streamResponse(request, progress, abortController.signal);
@@ -232,8 +275,10 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     settings: CustomBackendSettings,
     id: string,
     caps?: {
+      aliases?: readonly string[];
       maxInputTokens?: number;
       maxOutputTokens?: number;
+      reasoning?: boolean;
       toolCalling?: boolean;
       vision?: boolean;
     },
@@ -259,6 +304,11 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       group: "tokens",
       type: "number",
     };
+    const reasoning = this.resolveReasoning(id, caps);
+    const properties: Record<string, object> = { contextSize: contextSizeSchema };
+    if (reasoning) {
+      properties.reasoningEffort = this.buildReasoningEffortSchema(id, reasoning);
+    }
     return {
       // Default to advertising tool calling; most OpenAI-compatible backends
       // support it, and the picker needs it enabled for agent mode.
@@ -267,15 +317,55 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         toolCalling: caps?.toolCalling ?? true,
       },
       category: this.pickerCategory(settings),
-      configurationSchema: { properties: { contextSize: contextSizeSchema } },
+      configurationSchema: { properties },
       family: "custom",
       id,
       isUserSelectable: true,
       maxInputTokens,
       maxOutputTokens,
       name: id,
+      reasoning,
       tooltip: `${settings.name ?? "Custom backend"} model: ${id}`,
       version: "1.0.0",
+    };
+  }
+
+  /**
+   * Resolve reasoning capability for a model, most authoritative first:
+   * backend-declared support (`/model/info` or list metadata) gates whether a
+   * picker appears at all; the concrete level *set* comes from the family
+   * heuristic (matched against the id and any aliases). A backend that declares
+   * support for an unrecognized family still gets the conservative level set.
+   */
+  private resolveReasoning(
+    id: string,
+    caps?: { aliases?: readonly string[]; reasoning?: boolean },
+  ): ReasoningCapability | undefined {
+    const heuristic = heuristicReasoningCapability(id, ...(caps?.aliases ?? []));
+    if (caps?.reasoning === false) {
+      return undefined;
+    }
+    if (caps?.reasoning === true) {
+      return heuristic ?? { format: "chat-completions", levels: ["low", "medium", "high"] };
+    }
+    return heuristic;
+  }
+
+  /** VS Code picker schema for the reasoning-effort levels of a model. */
+  private buildReasoningEffortSchema(id: string, reasoning: ReasoningCapability): object {
+    const levels = reasoning.levels;
+    return {
+      default: defaultReasoningEffort(levels, id),
+      description: "How much reasoning effort the model should apply.",
+      enum: [...levels],
+      enumDescriptions: levels.map(reasoningEffortDescription),
+      enumItemLabels: levels.map(reasoningEffortLabel),
+      // MUST be "navigation": VS Code's model picker surfaces the Thinking
+      // Effort dropdown by scanning configurationSchema for the property whose
+      // group is "navigation" (see modelPickerConfiguration.ts). "reasoning"
+      // or any other group name leaves the picker hidden.
+      group: "navigation",
+      type: "string",
     };
   }
 
@@ -354,7 +444,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
   }
 
   private reportUsage(
-    usage: undefined | { completionTokens?: number; promptTokens?: number },
+    usage: TokenUsage | undefined,
     progress: Progress<LanguageModelResponsePart>,
   ): void {
     // The prompt count is the dominant term in the badge numerator; report as
@@ -363,21 +453,37 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     if (usage?.promptTokens === undefined) return;
     try {
       const completionTokens = usage.completionTokens ?? 0;
-      const promptTokens = usage.promptTokens;
+      const cachedTokens = usage.cachedTokens ?? 0;
+      const cacheWriteTokens = usage.cacheWriteTokens ?? 0;
+
+      // Reconstruct the true prompt size so the context badge accumulates
+      // instead of shrinking on a cache hit. With Anthropic-style caching the
+      // backend may report only the *non-cached* input in `prompt_tokens`
+      // (QGenie) while the bulk of the context sits in cache-read/-write
+      // counters; those must be added back. Under the OpenAI convention
+      // (`prompt_tokens_details.cached_tokens`) the cached tokens are already
+      // inside `prompt_tokens`, so only cache *writes* are added.
+      const promptTokens =
+        usage.promptTokens + (usage.promptIncludesCached ? 0 : cachedTokens) + cacheWriteTokens;
+
       progress.report(
         vscode.LanguageModelDataPart.json(
           {
             completion_tokens: completionTokens,
             prompt_tokens: promptTokens,
-            prompt_tokens_details: { cached_tokens: 0 },
+            prompt_tokens_details: { cached_tokens: cachedTokens },
             total_tokens: promptTokens + completionTokens,
           },
           "usage",
         ),
       );
       logger.debug("[Custom Provider] Reported token usage", {
+        cacheWriteTokens,
+        cachedTokens,
         completionTokens,
+        promptIncludesCached: usage.promptIncludesCached ?? false,
         promptTokens,
+        rawPromptTokens: usage.promptTokens,
         totalTokens: promptTokens + completionTokens,
       });
     } catch (error) {
@@ -401,10 +507,15 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       }
 
       const discovered = await this.client.listModels(abortController.signal);
+      // LiteLLM-style backends expose per-model `supports_reasoning` only via a
+      // separate `/model/info` probe; merge it in (best-effort, may be empty).
+      const reasoningSupport = await this.client.fetchReasoningSupport(abortController.signal);
       return discovered.map((m) =>
         this.buildModelInfo(settings, m.id, {
+          aliases: m.aliases,
           maxInputTokens: m.maxInputTokens,
           maxOutputTokens: m.maxOutputTokens,
+          reasoning: reasoningSupport.get(m.id) ?? m.reasoning,
           toolCalling: m.toolCalling,
           vision: m.vision,
         }),
@@ -421,11 +532,11 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
   ): Promise<void> {
     const toolAccumulators = new Map<number, { args: string; id: string; name: string }>();
     // Accumulate usage field-by-field rather than replacing wholesale: gateways
-    // may split `prompt_tokens` and `completion_tokens` across chunks, or send a
-    // partial usage object mid-stream. Keeping the last defined value of each
-    // field ensures the final report carries the turn's full prompt size, which
-    // is what VS Code's context badge treats as the (absolute) numerator.
-    const usage: { completionTokens?: number; promptTokens?: number } = {};
+    // may split fields across chunks, or send a partial usage object mid-stream.
+    // Keeping the last defined value of each field ensures the final report
+    // carries the turn's full prompt size, which is what VS Code's context badge
+    // treats as the (absolute) numerator.
+    const usage: TokenUsage = {};
     let sawUsage = false;
 
     for await (const delta of this.client.streamChat(request, signal)) {
@@ -445,6 +556,17 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         if (delta.usage.completionTokens !== undefined) {
           usage.completionTokens = delta.usage.completionTokens;
           sawUsage = true;
+        }
+        if (delta.usage.cachedTokens !== undefined) {
+          usage.cachedTokens = delta.usage.cachedTokens;
+          sawUsage = true;
+        }
+        if (delta.usage.cacheWriteTokens !== undefined) {
+          usage.cacheWriteTokens = delta.usage.cacheWriteTokens;
+          sawUsage = true;
+        }
+        if (delta.usage.promptIncludesCached !== undefined) {
+          usage.promptIncludesCached = delta.usage.promptIncludesCached;
         }
       }
     }

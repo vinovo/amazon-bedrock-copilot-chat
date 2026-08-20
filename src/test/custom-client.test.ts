@@ -185,7 +185,13 @@ suite("Custom backend streaming", () => {
       ["Hello", " world"],
     );
     const usageDelta = deltas.find((d) => d.usage);
-    assert.deepStrictEqual(usageDelta?.usage, { completionTokens: 5, promptTokens: 1234 });
+    assert.deepStrictEqual(usageDelta?.usage, {
+      cacheWriteTokens: undefined,
+      cachedTokens: undefined,
+      completionTokens: 5,
+      promptIncludesCached: false,
+      promptTokens: 1234,
+    });
   });
 
   test("recovers the final usage chunk when the stream ends without a trailing blank line", async () => {
@@ -199,8 +205,78 @@ suite("Custom backend streaming", () => {
     const usageDelta = deltas.find((d) => d.usage);
     assert.deepStrictEqual(
       usageDelta?.usage,
-      { completionTokens: 7, promptTokens: 999 },
+      {
+        cacheWriteTokens: undefined,
+        cachedTokens: undefined,
+        completionTokens: 7,
+        promptIncludesCached: false,
+        promptTokens: 999,
+      },
       "trailing usage event must be flushed when the stream closes unterminated",
     );
+  });
+
+  test("reconstructs the true prompt size from raw Anthropic top-level cache counters", async () => {
+    // Raw Anthropic shape: cached tokens live in top-level
+    // cache_read_input_tokens/cache_creation_input_tokens, outside prompt_tokens.
+    const deltas = await collect(
+      `data: ${JSON.stringify({
+        choices: [],
+        usage: {
+          cache_creation_input_tokens: 200,
+          cache_read_input_tokens: 93610,
+          completion_tokens: 12,
+          prompt_tokens: 2,
+        },
+      })}\n\n` + `data: [DONE]\n\n`,
+    );
+    const usage = deltas.find((d) => d.usage)?.usage;
+    assert.strictEqual(usage?.cachedTokens, 93610);
+    assert.strictEqual(usage?.cacheWriteTokens, 200);
+    assert.strictEqual(usage?.promptTokens, 2);
+    assert.strictEqual(usage?.promptIncludesCached, false, "raw Anthropic shape excludes cache");
+  });
+
+  test("reads QGenie nested cache_read_tokens/cache_write_tokens (outside prompt_tokens)", async () => {
+    // Confirmed live QGenie shape: cache counters are NESTED in
+    // prompt_tokens_details under cache_read_tokens/cache_write_tokens, and
+    // prompt_tokens holds only the non-cached delta.
+    const deltas = await collect(
+      `data: ${JSON.stringify({
+        choices: [],
+        usage: {
+          completion_tokens: 4,
+          prompt_tokens: 3,
+          prompt_tokens_details: { cache_read_tokens: 4403, cache_write_tokens: 11 },
+          total_tokens: 4421,
+        },
+      })}\n\n` + `data: [DONE]\n\n`,
+    );
+    const usage = deltas.find((d) => d.usage)?.usage;
+    assert.strictEqual(usage?.cachedTokens, 4403);
+    assert.strictEqual(usage?.cacheWriteTokens, 11);
+    assert.strictEqual(usage?.promptTokens, 3);
+    assert.strictEqual(
+      usage?.promptIncludesCached,
+      false,
+      "QGenie prompt_tokens excludes cached tokens",
+    );
+  });
+
+  test("marks cached tokens as already included under the OpenAI convention", async () => {
+    const deltas = await collect(
+      `data: ${JSON.stringify({
+        choices: [],
+        usage: {
+          completion_tokens: 12,
+          prompt_tokens: 95000,
+          prompt_tokens_details: { cached_tokens: 93610 },
+        },
+      })}\n\n` + `data: [DONE]\n\n`,
+    );
+    const usage = deltas.find((d) => d.usage)?.usage;
+    assert.strictEqual(usage?.cachedTokens, 93610);
+    assert.strictEqual(usage?.promptTokens, 95000);
+    assert.strictEqual(usage?.promptIncludesCached, true, "OpenAI shape includes cache in prompt");
   });
 });

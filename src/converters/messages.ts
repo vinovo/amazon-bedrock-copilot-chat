@@ -123,34 +123,40 @@ function addPromptCachingPoints(
 ): void {
   if (!profile.supportsPromptCaching) return;
 
+  // Bedrock allows at most 4 cache points per request. The system block, when
+  // present, consumes one; spend the rest on the most recent messages so long
+  // agentic loops keep hitting the cache on prior turns / tool results.
+  const MAX_CACHE_POINTS = 4;
+  let messageBudget = MAX_CACHE_POINTS;
+
   // Add cache point after system messages
   if (systemMessages.length > 0) {
     systemMessages.push({ cachePoint: { type: CachePointType.DEFAULT } });
+    messageBudget--;
   }
 
-  // Add cache points to the last 2 user messages
+  // Cache the most recent messages, up to the remaining budget.
   let indicesToCache: number[] = [];
 
-  if (profile.supportsCachingWithToolResults && userMessageIndicesWithToolResults.length > 0) {
-    // Model supports caching with tool results: cache messages WITH tool results
-    indicesToCache = userMessageIndicesWithToolResults.slice(-2);
+  if (profile.supportsCachingWithToolResults) {
+    // Model can cache after tool results, so cache the most recent user turns
+    // outright (whether or not they carry tool results). Preferring tool-result
+    // turns when present keeps the stable agentic-loop prefix cached; when none
+    // exist yet, the recent user turns are still cached so a plain multi-turn
+    // chat benefits too.
+    const preferred = userMessageIndicesWithToolResults;
+    const recentUsers = collectUserMessageIndices(bedrockMessages);
+    indicesToCache = (preferred.length > 0 ? preferred : recentUsers).slice(-messageBudget);
     logger.debug(
-      `[Message Converter] Adding cache points to last ${indicesToCache.length} messages with tool results (indices: ${indicesToCache.join(", ")})`,
+      `[Message Converter] Adding cache points to last ${indicesToCache.length} recent user messages (indices: ${indicesToCache.join(", ")})`,
     );
-  } else if (!profile.supportsCachingWithToolResults) {
-    // Model does NOT support caching with tool results: cache messages WITHOUT tool results
-    const userMessagesWithoutToolResults: number[] = [];
-    for (const [i, message] of bedrockMessages.entries()) {
-      if (
-        message?.role === ConversationRole.USER &&
-        !userMessageIndicesWithToolResults.includes(i)
-      ) {
-        userMessagesWithoutToolResults.push(i);
-      }
-    }
-
-    // Get the last 2 indices
-    indicesToCache = userMessagesWithoutToolResults.slice(-2);
+  } else {
+    // Model does NOT support caching with tool results (e.g. extended-thinking
+    // models): cache only recent user messages WITHOUT tool results.
+    const withoutToolResults = collectUserMessageIndices(bedrockMessages).filter(
+      (i) => !userMessageIndicesWithToolResults.includes(i),
+    );
+    indicesToCache = withoutToolResults.slice(-messageBudget);
     if (indicesToCache.length > 0) {
       logger.debug(
         `[Message Converter] Adding cache points to last ${indicesToCache.length} messages without tool results (indices: ${indicesToCache.join(", ")})`,
@@ -165,6 +171,17 @@ function addPromptCachingPoints(
       message.content.push({ cachePoint: { type: CachePointType.DEFAULT } });
     }
   }
+}
+
+/** Indices of all user-role messages, in order. */
+function collectUserMessageIndices(bedrockMessages: BedrockMessage[]): number[] {
+  const indices: number[] = [];
+  for (const [i, message] of bedrockMessages.entries()) {
+    if (message?.role === ConversationRole.USER) {
+      indices.push(i);
+    }
+  }
+  return indices;
 }
 
 /**
@@ -489,7 +506,9 @@ function processImagePart(part: ImageDataPart, role: ConversationRole): ContentB
 /**
  * Process all parts of a system message
  */
-function processSystemMessageParts(msg: vscode.LanguageModelChatRequestMessage): SystemContentBlock[] {
+function processSystemMessageParts(
+  msg: vscode.LanguageModelChatRequestMessage,
+): SystemContentBlock[] {
   const systemBlocks: SystemContentBlock[] = [];
 
   for (const part of msg.content) {

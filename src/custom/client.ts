@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { Agent } from "undici";
 
 import { logger } from "../logger";
+import type { ReasoningEffortLevel } from "./reasoning";
 
 /**
  * Minimal client for OpenAI-compatible chat backends.
@@ -16,6 +17,8 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   messages: OpenAIChatMessage[];
   model: string;
+  /** Reasoning effort forwarded to reasoning-capable models (Chat Completions form). */
+  reasoning_effort?: ReasoningEffortLevel;
   stream: true;
   /** Request that the backend include token-usage data in the final streaming chunk. */
   stream_options?: { include_usage?: boolean };
@@ -38,10 +41,17 @@ export interface CustomBackendConfig {
 /** A single model as reported by `GET /v1/models`. */
 export interface CustomModel {
   readonly id: string;
+  /** Alternate ids/aliases the backend lists for this model (used for family matching). */
+  readonly aliases?: readonly string[];
   /** Context window (input tokens) reported by the backend, if any. */
   readonly maxInputTokens?: number;
   /** Maximum output tokens reported by the backend, if any. */
   readonly maxOutputTokens?: number;
+  /**
+   * Whether the backend explicitly declares reasoning/thinking support for this
+   * model. `undefined` means the backend said nothing (fall back to heuristics).
+   */
+  readonly reasoning?: boolean;
   /** Whether the backend reports tool/function-calling support for this model. */
   readonly toolCalling?: boolean;
   /** Whether the backend reports image input support for this model. */
@@ -50,7 +60,7 @@ export interface CustomModel {
 
 /** OpenAI chat message shape sent on the wire. */
 export interface OpenAIChatMessage {
-  content: null | OpenAIContentPart[] | string;
+  content: null | OpenAIContentPartWithCache[] | string;
   name?: string;
   role: "assistant" | "system" | "tool" | "user";
   tool_call_id?: string;
@@ -60,6 +70,19 @@ export interface OpenAIChatMessage {
 export type OpenAIContentPart =
   | { image_url: { url: string }; type: "image_url" }
   | { text: string; type: "text" };
+
+/**
+ * Anthropic-style prompt-cache breakpoint. Attached to the last content block
+ * of a message (or a tool result) to mark "cache everything up to here".
+ * LiteLLM/breeze forwards this verbatim to the Anthropic Messages API; backends
+ * that don't understand it ignore the unknown field.
+ */
+export interface CacheControl {
+  type: "ephemeral";
+}
+
+/** A content part that may carry a cache breakpoint (text/image on the wire). */
+export type OpenAIContentPartWithCache = OpenAIContentPart & { cache_control?: CacheControl };
 
 export interface OpenAITool {
   function: {
@@ -86,7 +109,33 @@ export interface StreamDelta {
     index: number;
     name?: string;
   }[];
-  usage?: { completionTokens?: number; promptTokens?: number };
+  usage?: TokenUsage;
+}
+
+/**
+ * Normalized token usage. With Anthropic-style prompt caching, backends differ
+ * in whether `prompt_tokens` already includes cached tokens: LiteLLM normalizes
+ * it to include them, but some gateways (e.g. QGenie) report only the
+ * *non-cached* input in `prompt_tokens` and surface the rest separately. We
+ * capture the cache fields so the context numerator can be reconstructed as the
+ * true total instead of shrinking on a cache hit.
+ */
+export interface TokenUsage {
+  /** Cache-creation (write) input tokens, when the backend reports them. */
+  cacheWriteTokens?: number;
+  /** Cache-read (hit) input tokens, when the backend reports them. */
+  cachedTokens?: number;
+  completionTokens?: number;
+  /**
+   * Whether `promptTokens` already includes {@link cachedTokens}. The OpenAI
+   * convention (`prompt_tokens_details.cached_tokens`) counts cached tokens
+   * inside `prompt_tokens`; Anthropic's raw shape (`cache_read_input_tokens`)
+   * reports them *outside* `prompt_tokens`. This tells the numerator math
+   * whether to add the cached tokens or not.
+   */
+  promptIncludesCached?: boolean;
+  /** Prompt tokens as reported; may or may not already include cached tokens. */
+  promptTokens?: number;
 }
 
 export class CustomBackendClient {
@@ -128,6 +177,47 @@ export class CustomBackendClient {
       url,
     });
     return models;
+  }
+
+  /**
+   * Probe LiteLLM's `/v1/model/info` for per-model capability metadata that the
+   * plain `/models` list omits — notably `supports_reasoning`. Returns a map of
+   * model id → declared reasoning support. Non-LiteLLM backends 404/err here;
+   * failures are swallowed (returns an empty map) so discovery still succeeds.
+   */
+  async fetchReasoningSupport(signal?: AbortSignal): Promise<Map<string, boolean>> {
+    const support = new Map<string, boolean>();
+    let response: Response;
+    try {
+      response = await fetch(this.endpoint("/model/info"), {
+        dispatcher: this.dispatcher(),
+        headers: this.headers(),
+        signal,
+      } as RequestInit);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      return support;
+    }
+    if (!response.ok) return support;
+
+    let json: unknown;
+    try {
+      json = await response.json();
+    } catch {
+      return support;
+    }
+
+    for (const entry of extractModelList(json)) {
+      if (!entry || typeof entry !== "object") continue;
+      const obj = entry as Record<string, unknown>;
+      const id = extractModelId(obj);
+      const info = obj.model_info as Record<string, unknown> | undefined;
+      const supports = info?.supports_reasoning ?? obj.supports_reasoning;
+      if (id && typeof supports === "boolean") {
+        support.set(id, supports);
+      }
+    }
+    return support;
   }
 
   setConfig(config: CustomBackendConfig): void {
@@ -355,8 +445,10 @@ function parseModelList(json: unknown): CustomModel[] {
       seen.add(id);
       models.push({
         id,
+        aliases: extractAliases(obj, id),
         maxInputTokens: numericField(obj, ["max_input_tokens", "context_length", "context_window"]),
         maxOutputTokens: numericField(obj, ["max_output_tokens", "max_tokens"]),
+        reasoning: supportsReasoning(obj),
         toolCalling: supportsTools(obj),
         vision: supportsVision(obj),
       });
@@ -446,11 +538,39 @@ function parseToolCallDeltas(toolCalls: unknown[]): NonNullable<StreamDelta["too
 
 function parseUsage(usage: Record<string, unknown> | undefined): StreamDelta["usage"] {
   if (!usage) return undefined;
+  const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+  // Cache accounting varies by backend, in both key names AND whether cached
+  // tokens are already counted inside `prompt_tokens`:
+  //   - OpenAI/LiteLLM: `prompt_tokens_details.cached_tokens`, INSIDE prompt_tokens.
+  //   - QGenie:         `prompt_tokens_details.cache_read_tokens` /
+  //                     `.cache_write_tokens`, OUTSIDE prompt_tokens
+  //                     (prompt_tokens holds only the non-cached delta).
+  //   - Anthropic raw:  top-level `cache_read_input_tokens` /
+  //                     `cache_creation_input_tokens`, OUTSIDE prompt_tokens.
+  // `promptIncludesCached` is true only for the OpenAI convention so the
+  // numerator math knows whether to add cache reads back.
+  const openAiCached = numberOrUndefined(details?.cached_tokens);
+  const externalCachedRead =
+    numberOrUndefined(details?.cache_read_tokens) ??
+    numberOrUndefined(usage.cache_read_input_tokens) ??
+    numberOrUndefined(usage.cache_read_tokens);
+  const cachedTokens = openAiCached ?? externalCachedRead;
+  const cacheWriteTokens =
+    numberOrUndefined(details?.cache_write_tokens) ??
+    numberOrUndefined(usage.cache_creation_input_tokens) ??
+    numberOrUndefined(usage.cache_creation_tokens);
   return {
-    completionTokens:
-      typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
-    promptTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined,
+    cacheWriteTokens,
+    cachedTokens,
+    completionTokens: numberOrUndefined(usage.completion_tokens),
+    promptIncludesCached: openAiCached !== undefined,
+    promptTokens: numberOrUndefined(usage.prompt_tokens),
   };
+}
+
+/** Coerce a value to a finite non-negative number, or `undefined`. */
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 async function safeText(response: Response): Promise<string> {
@@ -460,6 +580,41 @@ async function safeText(response: Response): Promise<string> {
   } catch {
     return "<no body>";
   }
+}
+
+/** Collect alternate ids/aliases for family matching, excluding the primary id. */
+function extractAliases(obj: Record<string, unknown>, primaryId: string): string[] | undefined {
+  const aliases = new Set<string>();
+  for (const key of ["model", "name", "model_name"] as const) {
+    const value = obj[key];
+    if (typeof value === "string" && value && value !== primaryId) {
+      aliases.add(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string" && item && item !== primaryId) aliases.add(item);
+      }
+    }
+  }
+  return aliases.size > 0 ? [...aliases] : undefined;
+}
+
+/** Derive reasoning/thinking support from capability metadata, if present. */
+function supportsReasoning(obj: Record<string, unknown>): boolean | undefined {
+  const info = obj.model_info as Record<string, unknown> | undefined;
+  if (info && typeof info.supports_reasoning === "boolean") {
+    return info.supports_reasoning;
+  }
+  if (typeof obj.supports_reasoning === "boolean") {
+    return obj.supports_reasoning;
+  }
+  const modelType = obj.model_type as Record<string, unknown> | undefined;
+  if (modelType && typeof modelType.is_reasoning === "boolean") {
+    return modelType.is_reasoning;
+  }
+  if (hasCapability(obj, "reasoning") || hasCapability(obj, "thinking")) {
+    return true;
+  }
+  return undefined;
 }
 
 /** Derive tool/function-calling support from capability metadata, if present. */
