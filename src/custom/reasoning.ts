@@ -55,6 +55,12 @@ export interface ReasoningCapability {
   readonly format: ReasoningEffortFormat;
   /** Allowed effort levels for this model, in picker order. Never empty. */
   readonly levels: ReasoningEffortLevel[];
+  /**
+   * When true, the backend rejects `reasoning_effort` if tools are also present
+   * in the same request (e.g. `gpt-5.6-*` Azure models). The provider must
+   * omit `reasoning_effort` whenever tools are sent to these models.
+   */
+  readonly toolsIncompatibleWithReasoning?: boolean;
 }
 
 /**
@@ -88,6 +94,15 @@ export function heuristicReasoningCapability(
     const id = normalizeId(raw);
 
     // OpenAI reasoning families: GPT-5+ and the o-series.
+    // gpt-5.6-* (sol, terra, luna, ...) reject reasoning_effort when tools are
+    // also present; they only accept effort if no function tools are sent.
+    if (/^gpt-5\.6/.test(id)) {
+      return {
+        format: "chat-completions",
+        levels: GPT_LEVELS,
+        toolsIncompatibleWithReasoning: true,
+      };
+    }
     if (id.startsWith("gpt-5") || /^o[1-9]/.test(id)) {
       return { format: "chat-completions", levels: GPT_LEVELS };
     }

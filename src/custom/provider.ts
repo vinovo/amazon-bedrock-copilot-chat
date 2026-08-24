@@ -210,7 +210,19 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       const reasoning = (model as CustomLanguageModelChatInformation).reasoning;
       const pickedEffort = modelConfig?.reasoningEffort;
       if (typeof pickedEffort === "string" && reasoning) {
-        if ((reasoning.levels as readonly string[]).includes(pickedEffort)) {
+        const hasTools = (request.tools?.length ?? 0) > 0;
+        if (reasoning.toolsIncompatibleWithReasoning && hasTools) {
+          // This model family rejects reasoning_effort when tools are also in
+          // the request (e.g. gpt-5.6-*). Silently omit the effort so the
+          // request succeeds; tool calling takes priority.
+          logger.debug(
+            "[Custom Provider] Omitting reasoning_effort: model incompatible with tools+effort",
+            {
+              effort: pickedEffort,
+              modelId: model.id,
+            },
+          );
+        } else if ((reasoning.levels as readonly string[]).includes(pickedEffort)) {
           request.reasoning_effort = pickedEffort as ReasoningEffortLevel;
         } else {
           logger.warn("[Custom Provider] Dropping unsupported reasoning effort", {

@@ -79142,6 +79142,13 @@ function heuristicReasoningCapability(...idsOrAliases) {
     if (!raw)
       continue;
     const id = normalizeId(raw);
+    if (/^gpt-5\.6/.test(id)) {
+      return {
+        format: "chat-completions",
+        levels: GPT_LEVELS,
+        toolsIncompatibleWithReasoning: true
+      };
+    }
     if (id.startsWith("gpt-5") || /^o[1-9]/.test(id)) {
       return { format: "chat-completions", levels: GPT_LEVELS };
     }
@@ -79385,7 +79392,13 @@ class CustomChatModelProvider {
       const reasoning = model.reasoning;
       const pickedEffort = modelConfig?.reasoningEffort;
       if (typeof pickedEffort === "string" && reasoning) {
-        if (reasoning.levels.includes(pickedEffort)) {
+        const hasTools = (request.tools?.length ?? 0) > 0;
+        if (reasoning.toolsIncompatibleWithReasoning && hasTools) {
+          logger.debug("[Custom Provider] Omitting reasoning_effort: model incompatible with tools+effort", {
+            effort: pickedEffort,
+            modelId: model.id
+          });
+        } else if (reasoning.levels.includes(pickedEffort)) {
           request.reasoning_effort = pickedEffort;
         } else {
           logger.warn("[Custom Provider] Dropping unsupported reasoning effort", {
@@ -82692,5 +82705,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=F9806E122A6B6D7164756E2164756E21
+//# debugId=0DFD9273E6DB5C9364756E2164756E21
 //# sourceMappingURL=extension.js.map

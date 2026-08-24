@@ -29,8 +29,20 @@ suite("Reasoning-effort family heuristic", () => {
   test("GPT-5 / o-series models get the six-level GPT set", () => {
     const gpt = heuristicReasoningCapability("gpt-5.2");
     assert.deepStrictEqual(gpt?.levels, ["none", "minimal", "low", "medium", "high", "xhigh"]);
+    assert.strictEqual(gpt?.toolsIncompatibleWithReasoning, undefined);
     const o = heuristicReasoningCapability("o3-mini");
     assert.deepStrictEqual(o?.levels, ["none", "minimal", "low", "medium", "high", "xhigh"]);
+  });
+
+  test("gpt-5.6-* variants set toolsIncompatibleWithReasoning (reject tools+effort)", () => {
+    // Confirmed against the live QGenie API: gpt-5.6-sol, gpt-5.6-terra, and
+    // gpt-5.6-luna all return HTTP 400 when reasoning_effort + tools are both
+    // present in the same request. effort=none or tools-only requests succeed.
+    for (const id of ["gpt-5.6-sol", "azure::gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      const cap = heuristicReasoningCapability(id);
+      assert.strictEqual(cap?.toolsIncompatibleWithReasoning, true, `expected flag for ${id}`);
+      assert.deepStrictEqual(cap?.levels, ["none", "minimal", "low", "medium", "high", "xhigh"]);
+    }
   });
 
   test("Claude 4.x / 5 models get the five-level Claude set", () => {
