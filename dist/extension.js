@@ -78533,27 +78533,6 @@ class CustomBackendClient {
   constructor(config) {
     this.config = config;
   }
-  async listModels(signal) {
-    const url = this.endpoint("/models");
-    const response = await fetch(url, {
-      dispatcher: this.dispatcher(),
-      headers: this.headers(),
-      signal
-    });
-    if (!response.ok) {
-      const body = await safeText(response);
-      throw new CustomBackendError(`Model listing failed (${response.status}): ${body}`, response.status);
-    }
-    const json = await response.json();
-    const models = parseModelList(json);
-    logger.debug("[Custom Provider] Model listing response", {
-      discovered: models.length,
-      raw: JSON.stringify(json)?.slice(0, 2000),
-      topLevelKeys: json && typeof json === "object" ? Object.keys(json) : typeof json,
-      url
-    });
-    return models;
-  }
   async fetchReasoningSupport(signal) {
     const support = new Map;
     let response;
@@ -78589,23 +78568,86 @@ class CustomBackendClient {
     }
     return support;
   }
+  async listModels(signal) {
+    const url = this.endpoint("/models");
+    const response = await fetch(url, {
+      dispatcher: this.dispatcher(),
+      headers: this.headers(),
+      signal
+    });
+    if (!response.ok) {
+      const body = await safeText(response);
+      throw new CustomBackendError(`Model listing failed (${response.status}): ${body}`, response.status);
+    }
+    const json = await response.json();
+    const models = parseModelList(json);
+    logger.debug("[Custom Provider] Model listing response", {
+      discovered: models.length,
+      raw: JSON.stringify(json)?.slice(0, 2000),
+      topLevelKeys: json && typeof json === "object" ? Object.keys(json) : typeof json,
+      url
+    });
+    return models;
+  }
   setConfig(config) {
     this.config = config;
   }
   async* streamChat(request, signal) {
     const url = this.endpoint("/chat/completions");
-    const response = await fetch(url, {
-      body: JSON.stringify(request),
-      dispatcher: this.dispatcher(),
-      headers: { ...this.headers(), "content-type": "application/json" },
-      method: "POST",
-      signal
+    const startedAt = Date.now();
+    logger.debug("[Custom Provider] Opening chat stream", {
+      hasTools: (request.tools?.length ?? 0) > 0,
+      messageCount: request.messages.length,
+      model: request.model,
+      reasoningEffort: request.reasoning_effort,
+      url
+    });
+    let response;
+    try {
+      response = await fetch(url, {
+        body: JSON.stringify(request),
+        dispatcher: this.dispatcher(),
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        signal
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError")
+        throw error;
+      logger.error("[Custom Provider] Chat stream transport failure", {
+        detail: describeError(error),
+        elapsedMs: Date.now() - startedAt,
+        model: request.model,
+        url
+      });
+      throw error;
+    }
+    logger.debug("[Custom Provider] Chat stream response headers", {
+      contentType: response.headers?.get("content-type"),
+      elapsedMs: Date.now() - startedAt,
+      ok: response.ok,
+      status: response.status
     });
     if (!response.ok || !response.body) {
       const body = await safeText(response);
+      logger.error("[Custom Provider] Chat request returned error status", {
+        body: body.slice(0, 2000),
+        hasBody: Boolean(response.body),
+        model: request.model,
+        status: response.status
+      });
       throw new CustomBackendError(`Chat request failed (${response.status}): ${body}`, response.status);
     }
-    yield* parseSseStream(response.body);
+    let eventCount = 0;
+    for await (const delta of parseSseStream(response.body)) {
+      eventCount++;
+      yield delta;
+    }
+    logger.debug("[Custom Provider] Chat stream completed", {
+      elapsedMs: Date.now() - startedAt,
+      events: eventCount,
+      model: request.model
+    });
   }
   dispatcher() {
     const { allowInsecureTls, caBundlePath } = this.config;
@@ -78659,6 +78701,43 @@ class CustomBackendError extends Error {
     this.name = "CustomBackendError";
   }
 }
+function describeError(error) {
+  if (!(error instanceof Error)) {
+    return { value: String(error) };
+  }
+  const chain = [];
+  let current = error;
+  const seen = new Set;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    const code = current.code;
+    const codeSuffix = code ? ` (${String(code)})` : "";
+    chain.push(`${current.name}: ${current.message}${codeSuffix}`);
+    current = current.cause;
+  }
+  const root = error;
+  return {
+    causeChain: chain,
+    code: error.code ?? root.cause?.code,
+    message: error.message,
+    name: error.name
+  };
+}
+function extractAliases(obj, primaryId) {
+  const aliases = new Set;
+  for (const key of ["model", "name", "model_name"]) {
+    const value = obj[key];
+    if (typeof value === "string" && value && value !== primaryId) {
+      aliases.add(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string" && item && item !== primaryId)
+          aliases.add(item);
+      }
+    }
+  }
+  return aliases.size > 0 ? [...aliases] : undefined;
+}
 function extractModelId(obj) {
   for (const key of ["id", "model", "name", "model_name"]) {
     const id = firstString(obj[key]);
@@ -78692,15 +78771,6 @@ function firstString(value) {
   }
   return;
 }
-function numericField(obj, keys) {
-  for (const key of keys) {
-    const value = obj[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      return value;
-    }
-  }
-  return;
-}
 function hasCapability(obj, capability) {
   const capabilities = obj.capabilities;
   return Array.isArray(capabilities) && capabilities.includes(capability);
@@ -78714,6 +78784,18 @@ function isChatModel(obj) {
     return hasCapability(obj, "chat");
   }
   return true;
+}
+function numberOrUndefined(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+function numericField(obj, keys) {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return;
 }
 function parseChoice(choice, result) {
   if (typeof choice.finish_reason === "string") {
@@ -78763,8 +78845,8 @@ function parseModelList(json) {
         continue;
       seen.add(id);
       models.push({
-        id,
         aliases: extractAliases(obj, id),
+        id,
         maxInputTokens: numericField(obj, ["max_input_tokens", "context_length", "context_window"]),
         maxOutputTokens: numericField(obj, ["max_output_tokens", "max_tokens"]),
         reasoning: supportsReasoning(obj),
@@ -78818,6 +78900,7 @@ async function* parseSseStream(body) {
 `)) !== -1) {
         const rawEvent = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
+        logger.trace("[Custom Provider] SSE event", { raw: rawEvent.slice(0, 500) });
         const outcome = parseSseEvent(rawEvent);
         if (outcome === "done")
           return;
@@ -78853,15 +78936,12 @@ function parseUsage(usage) {
   const cachedTokens = openAiCached ?? externalCachedRead;
   const cacheWriteTokens = numberOrUndefined(details?.cache_write_tokens) ?? numberOrUndefined(usage.cache_creation_input_tokens) ?? numberOrUndefined(usage.cache_creation_tokens);
   return {
-    cacheWriteTokens,
     cachedTokens,
+    cacheWriteTokens,
     completionTokens: numberOrUndefined(usage.completion_tokens),
     promptIncludesCached: openAiCached !== undefined,
     promptTokens: numberOrUndefined(usage.prompt_tokens)
   };
-}
-function numberOrUndefined(value) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 async function safeText(response) {
   try {
@@ -78870,21 +78950,6 @@ async function safeText(response) {
   } catch {
     return "<no body>";
   }
-}
-function extractAliases(obj, primaryId) {
-  const aliases = new Set;
-  for (const key of ["model", "name", "model_name"]) {
-    const value = obj[key];
-    if (typeof value === "string" && value && value !== primaryId) {
-      aliases.add(value);
-    } else if (Array.isArray(value)) {
-      for (const item of value) {
-        if (typeof item === "string" && item && item !== primaryId)
-          aliases.add(item);
-      }
-    }
-  }
-  return aliases.size > 0 ? [...aliases] : undefined;
 }
 function supportsReasoning(obj) {
   const info = obj.model_info;
@@ -79242,6 +79307,77 @@ function reasoningEffortLabel(level) {
   }
 }
 
+// src/custom/limits.ts
+var CONSERVATIVE_MAX_OUTPUT_TOKENS = 8192;
+function fallbackMaxOutputTokens(rawId) {
+  const id = normalizeId(rawId);
+  return claudeMaxOutputTokens(id) ?? openAiMaxOutputTokens(id) ?? otherFamilyMaxOutputTokens(id) ?? CONSERVATIVE_MAX_OUTPUT_TOKENS;
+}
+function resolveMaxOutputTokens(rawId, reported) {
+  if (typeof reported === "number" && Number.isFinite(reported) && reported > 0) {
+    return reported;
+  }
+  return fallbackMaxOutputTokens(rawId);
+}
+function claudeMaxOutputTokens(id) {
+  const tier = /\b(opus|sonnet|haiku|fable)\b/.exec(id)?.[1];
+  if (!tier)
+    return;
+  const nums = id.split(/\D+/).filter((s) => s.length > 0 && s.length <= 2).map(Number);
+  const gen = (nums[0] ?? 0) + (nums[1] ?? 0) / 10;
+  if (tier === "fable")
+    return 128000;
+  if (tier === "haiku") {
+    if (gen >= 4.5)
+      return 64000;
+    if (gen >= 3.5)
+      return 8192;
+    return 4096;
+  }
+  if (tier === "opus") {
+    if (gen >= 4.6)
+      return 128000;
+    if (gen >= 4.5)
+      return 64000;
+    if (gen >= 4)
+      return 32000;
+    if (gen >= 3.5)
+      return 8192;
+    return 4096;
+  }
+  if (gen >= 5)
+    return 128000;
+  if (gen >= 4)
+    return 64000;
+  if (gen >= 3.5)
+    return 8192;
+  return 4096;
+}
+function openAiMaxOutputTokens(id) {
+  if (id.startsWith("gpt-5"))
+    return 128000;
+  if (/^o[1-9]/.test(id))
+    return 1e5;
+  if (id.startsWith("gpt-4.1"))
+    return 32000;
+  if (id.startsWith("gpt-4o"))
+    return 16384;
+  if (id.startsWith("gpt-4"))
+    return 8192;
+  return;
+}
+function otherFamilyMaxOutputTokens(id) {
+  if (id.startsWith("gemini")) {
+    const nums = id.split(/\D+/).filter((s) => s.length > 0 && s.length <= 2).map(Number);
+    const gen = (nums[0] ?? 0) + (nums[1] ?? 0) / 10;
+    return gen >= 2.5 ? 65536 : 8192;
+  }
+  if (id.startsWith("qwen") || id.startsWith("deepseek") || id.startsWith("llama")) {
+    return 8192;
+  }
+  return;
+}
+
 // src/custom/settings.ts
 var DEFAULT_MAX_INPUT_TOKENS = 128000;
 function parseBackendSettings(configuration) {
@@ -79304,7 +79440,6 @@ function positiveNumber(value) {
 // src/custom/provider.ts
 var CUSTOM_MODEL_PICKER_CATEGORY = { label: "Custom Backend", order: 60 };
 var CUSTOM_ERROR_SENTINEL_ID = "__custom_error_sentinel__";
-var DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
 class CustomChatModelProvider {
   globalState;
@@ -79368,6 +79503,11 @@ class CustomChatModelProvider {
     }
     const abortController = new AbortController;
     const cancellation = token.onCancellationRequested(() => abortController.abort());
+    logger.info("[Custom Provider] Handling chat request", {
+      messageCount: messages.length,
+      modelId: model.id,
+      toolCount: options.tools?.length ?? 0
+    });
     try {
       const request = {
         messages: convertMessages(messages),
@@ -79383,9 +79523,7 @@ class CustomChatModelProvider {
         request.tools = tools;
         request.tool_choice = mapToolChoice(options.toolMode);
       }
-      if (typeof options.modelOptions?.max_tokens === "number") {
-        request.max_tokens = options.modelOptions.max_tokens;
-      }
+      request.max_tokens = model.maxOutputTokens;
       if (typeof options.modelOptions?.temperature === "number") {
         request.temperature = options.modelOptions.temperature;
       }
@@ -79449,7 +79587,7 @@ class CustomChatModelProvider {
     const reported = caps?.maxInputTokens;
     const fallback = reported ?? settings.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
     const maxInputTokens = this.getPersistedContextSize(settings, id) ?? fallback;
-    const maxOutputTokens = caps?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    const maxOutputTokens = resolveMaxOutputTokens(id, caps?.maxOutputTokens);
     const contextSizeSchema = {
       default: maxInputTokens,
       description: "Context window size for this model.",
@@ -79486,16 +79624,6 @@ class CustomChatModelProvider {
       version: "1.0.0"
     };
   }
-  resolveReasoning(id, caps) {
-    const heuristic = heuristicReasoningCapability(id, ...caps?.aliases ?? []);
-    if (caps?.reasoning === false) {
-      return;
-    }
-    if (caps?.reasoning === true) {
-      return heuristic ?? { format: "chat-completions", levels: ["low", "medium", "high"] };
-    }
-    return heuristic;
-  }
   buildReasoningEffortSchema(id, reasoning) {
     const levels = reasoning.levels;
     return {
@@ -79524,10 +79652,8 @@ class CustomChatModelProvider {
     };
     return [sentinel];
   }
-  pickerCategory(settings) {
-    return settings.name ? { label: settings.name, order: CUSTOM_MODEL_PICKER_CATEGORY.order } : CUSTOM_MODEL_PICKER_CATEGORY;
-  }
   flushToolCalls(accumulators, progress) {
+    let emitted = 0;
     for (const acc of accumulators.values()) {
       if (!acc.name)
         continue;
@@ -79542,12 +79668,37 @@ class CustomChatModelProvider {
         input = {};
       }
       progress.report(new vscode6.LanguageModelToolCallPart(acc.id || acc.name, acc.name, input));
+      emitted++;
     }
+    return emitted;
   }
   getPersistedContextSize(settings, modelId) {
     const map = this.globalState.get(CustomChatModelProvider.CONTEXT_SELECTION_KEY, {});
     const value = map[contextSelectionKey(settings, modelId)];
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  }
+  mergeUsage(target, delta) {
+    let saw = false;
+    if (delta.promptTokens !== undefined) {
+      target.promptTokens = delta.promptTokens;
+      saw = true;
+    }
+    if (delta.completionTokens !== undefined) {
+      target.completionTokens = delta.completionTokens;
+      saw = true;
+    }
+    if (delta.cachedTokens !== undefined) {
+      target.cachedTokens = delta.cachedTokens;
+      saw = true;
+    }
+    if (delta.cacheWriteTokens !== undefined) {
+      target.cacheWriteTokens = delta.cacheWriteTokens;
+      saw = true;
+    }
+    if (delta.promptIncludesCached !== undefined) {
+      target.promptIncludesCached = delta.promptIncludesCached;
+    }
+    return saw;
   }
   async persistContextSize(settings, modelId, maxInputTokens) {
     const map = {
@@ -79555,6 +79706,9 @@ class CustomChatModelProvider {
       [contextSelectionKey(settings, modelId)]: maxInputTokens
     };
     await this.globalState.update(CustomChatModelProvider.CONTEXT_SELECTION_KEY, map);
+  }
+  pickerCategory(settings) {
+    return settings.name ? { label: settings.name, order: CUSTOM_MODEL_PICKER_CATEGORY.order } : CUSTOM_MODEL_PICKER_CATEGORY;
   }
   reportUsage(usage, progress) {
     if (usage?.promptTokens === undefined)
@@ -79571,8 +79725,8 @@ class CustomChatModelProvider {
         total_tokens: promptTokens + completionTokens
       }, "usage"));
       logger.debug("[Custom Provider] Reported token usage", {
-        cacheWriteTokens,
         cachedTokens,
+        cacheWriteTokens,
         completionTokens,
         promptIncludesCached: usage.promptIncludesCached ?? false,
         promptTokens,
@@ -79606,50 +79760,68 @@ class CustomChatModelProvider {
       cancellation.dispose();
     }
   }
+  resolveReasoning(id, caps) {
+    const heuristic = heuristicReasoningCapability(id, ...caps?.aliases ?? []);
+    if (caps?.reasoning === false) {
+      return;
+    }
+    if (caps?.reasoning === true) {
+      return heuristic ?? { format: "chat-completions", levels: ["low", "medium", "high"] };
+    }
+    return heuristic;
+  }
   async streamResponse(request, progress, signal) {
     const toolAccumulators = new Map;
     const usage = {};
     let sawUsage = false;
+    let emittedText = false;
+    let finishReason;
     for await (const delta of this.client.streamChat(request, signal)) {
       if (delta.content) {
         progress.report(new vscode6.LanguageModelTextPart(delta.content));
+        emittedText = true;
       }
       if (delta.toolCalls) {
         for (const tc of delta.toolCalls) {
           this.accumulateToolCall(tc, toolAccumulators);
         }
       }
-      if (delta.usage) {
-        if (delta.usage.promptTokens !== undefined) {
-          usage.promptTokens = delta.usage.promptTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.completionTokens !== undefined) {
-          usage.completionTokens = delta.usage.completionTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.cachedTokens !== undefined) {
-          usage.cachedTokens = delta.usage.cachedTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.cacheWriteTokens !== undefined) {
-          usage.cacheWriteTokens = delta.usage.cacheWriteTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.promptIncludesCached !== undefined) {
-          usage.promptIncludesCached = delta.usage.promptIncludesCached;
-        }
+      if (delta.finishReason) {
+        finishReason = delta.finishReason;
+      }
+      if (delta.usage && this.mergeUsage(usage, delta.usage)) {
+        sawUsage = true;
       }
     }
-    this.flushToolCalls(toolAccumulators, progress);
+    const emittedToolCalls = this.flushToolCalls(toolAccumulators, progress);
     this.reportUsage(sawUsage ? usage : undefined, progress);
+    this.validateStreamOutcome({ emittedContent: emittedText || emittedToolCalls > 0, finishReason }, progress, signal);
   }
-}
-function mapToolChoice(mode) {
-  return mode === vscode6.LanguageModelChatToolMode.Required ? "required" : "auto";
+  validateStreamOutcome(outcome, progress, signal) {
+    if (outcome.emittedContent || signal.aborted) {
+      return;
+    }
+    if (outcome.finishReason === "length") {
+      throw new Error("The model reached its maximum token limit before producing any output. " + "Try reducing the conversation history or raising the max tokens setting.");
+    }
+    if (outcome.finishReason === "content_filter") {
+      throw new Error("The response was blocked by the backend's content safety policy before any " + "content was generated. Please rephrase your request.");
+    }
+    if (outcome.finishReason === undefined) {
+      logger.warn("[Custom Provider] Stream closed with no content and no finish reason — likely transport truncation");
+      throw new Error("The connection to the backend closed before the response completed. " + "This is usually a transient network issue — please retry the request.");
+    }
+    logger.info("[Custom Provider] Model returned an empty response", {
+      finishReason: outcome.finishReason
+    });
+    progress.report(new vscode6.LanguageModelTextPart("*(The model returned an empty response. Please try again or rephrase your request.)*"));
+  }
 }
 function contextSelectionKey(settings, modelId) {
   return `${settings.baseUrl ?? ""}::${modelId}`;
+}
+function mapToolChoice(mode) {
+  return mode === vscode6.LanguageModelChatToolMode.Required ? "required" : "auto";
 }
 
 // src/provider.ts
@@ -82705,5 +82877,5 @@ function deactivate() {
   logger.trace("deactivate called");
 }
 
-//# debugId=0DFD9273E6DB5C9364756E2164756E21
+//# debugId=951767EAE8CA36BE64756E2164756E21
 //# sourceMappingURL=extension.js.map

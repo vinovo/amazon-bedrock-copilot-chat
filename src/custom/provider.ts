@@ -18,6 +18,7 @@ import {
   type TokenUsage,
 } from "./client";
 import { addCacheBreakpoints, convertMessages, convertTools } from "./converter";
+import { resolveMaxOutputTokens } from "./limits";
 import {
   defaultReasoningEffort,
   heuristicReasoningCapability,
@@ -34,9 +35,8 @@ import {
   toBackendConfig,
 } from "./settings";
 
-type CustomLanguageModelChatInformation = LanguageModelChatInformation & {
+type CustomLanguageModelChatInformation = {
   readonly category?: { label: string; order: number };
-  readonly isUserSelectable?: boolean;
   /**
    * The backend group's raw configuration (baseUrl/apiKey/...), embedded at
    * discovery time so VS Code round-trips it back to
@@ -45,6 +45,7 @@ type CustomLanguageModelChatInformation = LanguageModelChatInformation & {
    * `modelConfiguration`, never the group config.
    */
   readonly configuration?: Record<string, unknown>;
+  readonly isUserSelectable?: boolean;
   /**
    * Resolved reasoning-effort capability for this model, embedded at discovery
    * so it round-trips to {@link CustomChatModelProvider.provideLanguageModelChatResponse}
@@ -52,7 +53,7 @@ type CustomLanguageModelChatInformation = LanguageModelChatInformation & {
    * not reasoning-capable.
    */
   readonly reasoning?: ReasoningCapability;
-};
+} & LanguageModelChatInformation;
 
 const CUSTOM_MODEL_PICKER_CATEGORY = { label: "Custom Backend", order: 60 } as const;
 
@@ -63,17 +64,15 @@ const CUSTOM_MODEL_PICKER_CATEGORY = { label: "Custom Backend", order: 60 } as c
  */
 export const CUSTOM_ERROR_SENTINEL_ID = "__custom_error_sentinel__";
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
-
 /**
  * Options passed to {@link CustomChatModelProvider.provideLanguageModelChatInformation}.
  * The pinned proposed API only types `configuration`; `silent` is present at
  * runtime but not in the d.ts, so it is declared here defensively.
  */
-type PrepareOptions = {
+interface PrepareOptions {
   readonly configuration?: Record<string, unknown>;
   readonly silent?: boolean;
-};
+}
 
 export class CustomChatModelProvider implements vscode.Disposable, LanguageModelChatProvider {
   private static readonly CONTEXT_SELECTION_KEY = "custom.contextSelection";
@@ -173,6 +172,12 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     const abortController = new AbortController();
     const cancellation = token.onCancellationRequested(() => abortController.abort());
 
+    logger.info("[Custom Provider] Handling chat request", {
+      messageCount: messages.length,
+      modelId: model.id,
+      toolCount: options.tools?.length ?? 0,
+    });
+
     try {
       const request: ChatCompletionRequest = {
         messages: convertMessages(messages),
@@ -197,9 +202,11 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         request.tools = tools;
         request.tool_choice = mapToolChoice(options.toolMode);
       }
-      if (typeof options.modelOptions?.max_tokens === "number") {
-        request.max_tokens = options.modelOptions.max_tokens;
-      }
+      // Copilot defaults custom-provider max_tokens to 4096, which starves
+      // reasoning models — they can burn the whole budget on thinking and stop
+      // with finish_reason=length before emitting any answer. Request the
+      // model's real output ceiling instead.
+      request.max_tokens = model.maxOutputTokens;
       if (typeof options.modelOptions?.temperature === "number") {
         request.temperature = options.modelOptions.temperature;
       }
@@ -300,7 +307,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     const reported = caps?.maxInputTokens;
     const fallback = reported ?? settings.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
     const maxInputTokens = this.getPersistedContextSize(settings, id) ?? fallback;
-    const maxOutputTokens = caps?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    const maxOutputTokens = resolveMaxOutputTokens(id, caps?.maxOutputTokens);
     // The property key MUST be `contextSize`: VS Code's context-usage badge reads the window
     // denominator from `modelConfiguration.contextSize` / `properties.contextSize.default`.
     const contextSizeSchema = {
@@ -342,27 +349,6 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     };
   }
 
-  /**
-   * Resolve reasoning capability for a model, most authoritative first:
-   * backend-declared support (`/model/info` or list metadata) gates whether a
-   * picker appears at all; the concrete level *set* comes from the family
-   * heuristic (matched against the id and any aliases). A backend that declares
-   * support for an unrecognized family still gets the conservative level set.
-   */
-  private resolveReasoning(
-    id: string,
-    caps?: { aliases?: readonly string[]; reasoning?: boolean },
-  ): ReasoningCapability | undefined {
-    const heuristic = heuristicReasoningCapability(id, ...(caps?.aliases ?? []));
-    if (caps?.reasoning === false) {
-      return undefined;
-    }
-    if (caps?.reasoning === true) {
-      return heuristic ?? { format: "chat-completions", levels: ["low", "medium", "high"] };
-    }
-    return heuristic;
-  }
-
   /** VS Code picker schema for the reasoning-effort levels of a model. */
   private buildReasoningEffortSchema(id: string, reasoning: ReasoningCapability): object {
     const levels = reasoning.levels;
@@ -401,17 +387,11 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     return [sentinel];
   }
 
-  /** Picker category labeled with the backend's friendly name, when set. */
-  private pickerCategory(settings: CustomBackendSettings): { label: string; order: number } {
-    return settings.name
-      ? { label: settings.name, order: CUSTOM_MODEL_PICKER_CATEGORY.order }
-      : CUSTOM_MODEL_PICKER_CATEGORY;
-  }
-
   private flushToolCalls(
     accumulators: Map<number, { args: string; id: string; name: string }>,
     progress: Progress<LanguageModelResponsePart>,
-  ): void {
+  ): number {
+    let emitted = 0;
     for (const acc of accumulators.values()) {
       if (!acc.name) continue;
       let input: object;
@@ -425,7 +405,9 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         input = {};
       }
       progress.report(new vscode.LanguageModelToolCallPart(acc.id || acc.name, acc.name, input));
+      emitted++;
     }
+    return emitted;
   }
 
   private getPersistedContextSize(
@@ -438,6 +420,35 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     );
     const value = map[contextSelectionKey(settings, modelId)];
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  }
+
+  /**
+   * Merge a streamed usage delta into the running total, keeping the last
+   * defined value of each field. Returns true when any token field was present
+   * so the caller knows whether a usage report is warranted.
+   */
+  private mergeUsage(target: TokenUsage, delta: TokenUsage): boolean {
+    let saw = false;
+    if (delta.promptTokens !== undefined) {
+      target.promptTokens = delta.promptTokens;
+      saw = true;
+    }
+    if (delta.completionTokens !== undefined) {
+      target.completionTokens = delta.completionTokens;
+      saw = true;
+    }
+    if (delta.cachedTokens !== undefined) {
+      target.cachedTokens = delta.cachedTokens;
+      saw = true;
+    }
+    if (delta.cacheWriteTokens !== undefined) {
+      target.cacheWriteTokens = delta.cacheWriteTokens;
+      saw = true;
+    }
+    if (delta.promptIncludesCached !== undefined) {
+      target.promptIncludesCached = delta.promptIncludesCached;
+    }
+    return saw;
   }
 
   private async persistContextSize(
@@ -453,6 +464,13 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       [contextSelectionKey(settings, modelId)]: maxInputTokens,
     };
     await this.globalState.update(CustomChatModelProvider.CONTEXT_SELECTION_KEY, map);
+  }
+
+  /** Picker category labeled with the backend's friendly name, when set. */
+  private pickerCategory(settings: CustomBackendSettings): { label: string; order: number } {
+    return settings.name
+      ? { label: settings.name, order: CUSTOM_MODEL_PICKER_CATEGORY.order }
+      : CUSTOM_MODEL_PICKER_CATEGORY;
   }
 
   private reportUsage(
@@ -490,8 +508,8 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         ),
       );
       logger.debug("[Custom Provider] Reported token usage", {
-        cacheWriteTokens,
         cachedTokens,
+        cacheWriteTokens,
         completionTokens,
         promptIncludesCached: usage.promptIncludesCached ?? false,
         promptTokens,
@@ -537,6 +555,27 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     }
   }
 
+  /**
+   * Resolve reasoning capability for a model, most authoritative first:
+   * backend-declared support (`/model/info` or list metadata) gates whether a
+   * picker appears at all; the concrete level *set* comes from the family
+   * heuristic (matched against the id and any aliases). A backend that declares
+   * support for an unrecognized family still gets the conservative level set.
+   */
+  private resolveReasoning(
+    id: string,
+    caps?: { aliases?: readonly string[]; reasoning?: boolean },
+  ): ReasoningCapability | undefined {
+    const heuristic = heuristicReasoningCapability(id, ...(caps?.aliases ?? []));
+    if (caps?.reasoning === false) {
+      return undefined;
+    }
+    if (caps?.reasoning === true) {
+      return heuristic ?? { format: "chat-completions", levels: ["low", "medium", "high"] };
+    }
+    return heuristic;
+  }
+
   private async streamResponse(
     request: ChatCompletionRequest,
     progress: Progress<LanguageModelResponsePart>,
@@ -550,40 +589,32 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     // treats as the (absolute) numerator.
     const usage: TokenUsage = {};
     let sawUsage = false;
+    let emittedText = false;
+    // OpenAI streams the terminal reason (`stop`/`length`/`tool_calls`/
+    // `content_filter`) on the final chunk. Its presence is the analogue of
+    // Bedrock's `messageStop`: absence after the stream closes means the
+    // connection was cut mid-response, not that the model finished cleanly.
+    let finishReason: string | undefined;
 
     for await (const delta of this.client.streamChat(request, signal)) {
       if (delta.content) {
         progress.report(new vscode.LanguageModelTextPart(delta.content));
+        emittedText = true;
       }
       if (delta.toolCalls) {
         for (const tc of delta.toolCalls) {
           this.accumulateToolCall(tc, toolAccumulators);
         }
       }
-      if (delta.usage) {
-        if (delta.usage.promptTokens !== undefined) {
-          usage.promptTokens = delta.usage.promptTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.completionTokens !== undefined) {
-          usage.completionTokens = delta.usage.completionTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.cachedTokens !== undefined) {
-          usage.cachedTokens = delta.usage.cachedTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.cacheWriteTokens !== undefined) {
-          usage.cacheWriteTokens = delta.usage.cacheWriteTokens;
-          sawUsage = true;
-        }
-        if (delta.usage.promptIncludesCached !== undefined) {
-          usage.promptIncludesCached = delta.usage.promptIncludesCached;
-        }
+      if (delta.finishReason) {
+        finishReason = delta.finishReason;
+      }
+      if (delta.usage && this.mergeUsage(usage, delta.usage)) {
+        sawUsage = true;
       }
     }
 
-    this.flushToolCalls(toolAccumulators, progress);
+    const emittedToolCalls = this.flushToolCalls(toolAccumulators, progress);
 
     // Report token usage to VS Code's context-window tracker badge.
     // Convention: emit a LanguageModelDataPart with MIME "usage" whose JSON
@@ -591,13 +622,69 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     // consumes this and updates the badge numerator accordingly.
     // See: https://github.com/microsoft/vscode/pull/315394
     this.reportUsage(sawUsage ? usage : undefined, progress);
-  }
-}
 
-function mapToolChoice(
-  mode: undefined | vscode.LanguageModelChatToolMode,
-): ChatCompletionRequest["tool_choice"] {
-  return mode === vscode.LanguageModelChatToolMode.Required ? "required" : "auto";
+    this.validateStreamOutcome(
+      { emittedContent: emittedText || emittedToolCalls > 0, finishReason },
+      progress,
+      signal,
+    );
+  }
+
+  /**
+   * Decide how a completed stream should surface to the user, mirroring the
+   * Bedrock stream processor's `validateStreamResult`. Content-bearing turns
+   * pass through. Contentless turns are classified by the terminal
+   * `finish_reason` (OpenAI's analogue of Bedrock's `messageStop`):
+   *   - `length`        → token budget exhausted (throw, actionable).
+   *   - `content_filter`→ blocked by safety policy (throw, actionable).
+   *   - `stop`/other    → model genuinely had nothing to say; show a friendly
+   *                       placeholder rather than an error.
+   *   - *absent*        → the stream closed before any terminal reason arrived,
+   *                       i.e. mid-stream transport truncation; throw a
+   *                       retryable error instead of reporting a silent success.
+   */
+  private validateStreamOutcome(
+    outcome: { emittedContent: boolean; finishReason: string | undefined },
+    progress: Progress<LanguageModelResponsePart>,
+    signal: AbortSignal,
+  ): void {
+    if (outcome.emittedContent || signal.aborted) {
+      return;
+    }
+
+    if (outcome.finishReason === "length") {
+      throw new Error(
+        "The model reached its maximum token limit before producing any output. " +
+          "Try reducing the conversation history or raising the max tokens setting.",
+      );
+    }
+
+    if (outcome.finishReason === "content_filter") {
+      throw new Error(
+        "The response was blocked by the backend's content safety policy before any " +
+          "content was generated. Please rephrase your request.",
+      );
+    }
+
+    if (outcome.finishReason === undefined) {
+      logger.warn(
+        "[Custom Provider] Stream closed with no content and no finish reason — likely transport truncation",
+      );
+      throw new Error(
+        "The connection to the backend closed before the response completed. " +
+          "This is usually a transient network issue — please retry the request.",
+      );
+    }
+
+    logger.info("[Custom Provider] Model returned an empty response", {
+      finishReason: outcome.finishReason,
+    });
+    progress.report(
+      new vscode.LanguageModelTextPart(
+        "*(The model returned an empty response. Please try again or rephrase your request.)*",
+      ),
+    );
+  }
 }
 
 /**
@@ -606,4 +693,10 @@ function mapToolChoice(
  */
 function contextSelectionKey(settings: CustomBackendSettings, modelId: string): string {
   return `${settings.baseUrl ?? ""}::${modelId}`;
+}
+
+function mapToolChoice(
+  mode: undefined | vscode.LanguageModelChatToolMode,
+): ChatCompletionRequest["tool_choice"] {
+  return mode === vscode.LanguageModelChatToolMode.Required ? "required" : "auto";
 }

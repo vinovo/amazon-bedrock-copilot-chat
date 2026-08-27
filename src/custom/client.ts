@@ -13,6 +13,16 @@ import type { ReasoningEffortLevel } from "./reasoning";
  * makes it usable against a wide range of self-hosted gateways and proxies.
  */
 
+/**
+ * Anthropic-style prompt-cache breakpoint. Attached to the last content block
+ * of a message (or a tool result) to mark "cache everything up to here".
+ * LiteLLM/breeze forwards this verbatim to the Anthropic Messages API; backends
+ * that don't understand it ignore the unknown field.
+ */
+export interface CacheControl {
+  type: "ephemeral";
+}
+
 export interface ChatCompletionRequest {
   max_tokens?: number;
   messages: OpenAIChatMessage[];
@@ -40,9 +50,9 @@ export interface CustomBackendConfig {
 
 /** A single model as reported by `GET /v1/models`. */
 export interface CustomModel {
-  readonly id: string;
   /** Alternate ids/aliases the backend lists for this model (used for family matching). */
   readonly aliases?: readonly string[];
+  readonly id: string;
   /** Context window (input tokens) reported by the backend, if any. */
   readonly maxInputTokens?: number;
   /** Maximum output tokens reported by the backend, if any. */
@@ -70,16 +80,6 @@ export interface OpenAIChatMessage {
 export type OpenAIContentPart =
   | { image_url: { url: string }; type: "image_url" }
   | { text: string; type: "text" };
-
-/**
- * Anthropic-style prompt-cache breakpoint. Attached to the last content block
- * of a message (or a tool result) to mark "cache everything up to here".
- * LiteLLM/breeze forwards this verbatim to the Anthropic Messages API; backends
- * that don't understand it ignore the unknown field.
- */
-export interface CacheControl {
-  type: "ephemeral";
-}
 
 /** A content part that may carry a cache breakpoint (text/image on the wire). */
 export type OpenAIContentPartWithCache = OpenAIContentPart & { cache_control?: CacheControl };
@@ -121,10 +121,10 @@ export interface StreamDelta {
  * true total instead of shrinking on a cache hit.
  */
 export interface TokenUsage {
-  /** Cache-creation (write) input tokens, when the backend reports them. */
-  cacheWriteTokens?: number;
   /** Cache-read (hit) input tokens, when the backend reports them. */
   cachedTokens?: number;
+  /** Cache-creation (write) input tokens, when the backend reports them. */
+  cacheWriteTokens?: number;
   completionTokens?: number;
   /**
    * Whether `promptTokens` already includes {@link cachedTokens}. The OpenAI
@@ -139,45 +139,9 @@ export interface TokenUsage {
 }
 
 export class CustomBackendClient {
-  private dispatcherCache: { agent: Agent; key: string } | undefined;
+  private dispatcherCache: undefined | { agent: Agent; key: string };
 
   constructor(private config: CustomBackendConfig) {}
-
-  /**
-   * Fetch available models via `GET /v1/models`. Tolerates both the standard
-   * OpenAI envelope (`{ data: [{ id }] }`) and a bare array, and derives
-   * capability hints when the backend supplies them.
-   */
-  async listModels(signal?: AbortSignal): Promise<CustomModel[]> {
-    const url = this.endpoint("/models");
-    const response = await fetch(url, {
-      dispatcher: this.dispatcher(),
-      headers: this.headers(),
-      signal,
-    } as RequestInit);
-
-    if (!response.ok) {
-      const body = await safeText(response);
-      throw new CustomBackendError(
-        `Model listing failed (${response.status}): ${body}`,
-        response.status,
-      );
-    }
-
-    const json = await response.json();
-    const models = parseModelList(json);
-    logger.debug("[Custom Provider] Model listing response", {
-      discovered: models.length,
-      // Truncated raw body to reveal the actual shape when discovery yields 0.
-      raw: JSON.stringify(json)?.slice(0, 2000),
-      topLevelKeys:
-        json && typeof json === "object"
-          ? Object.keys(json as Record<string, unknown>)
-          : typeof json,
-      url,
-    });
-    return models;
-  }
 
   /**
    * Probe LiteLLM's `/v1/model/info` for per-model capability metadata that the
@@ -220,6 +184,42 @@ export class CustomBackendClient {
     return support;
   }
 
+  /**
+   * Fetch available models via `GET /v1/models`. Tolerates both the standard
+   * OpenAI envelope (`{ data: [{ id }] }`) and a bare array, and derives
+   * capability hints when the backend supplies them.
+   */
+  async listModels(signal?: AbortSignal): Promise<CustomModel[]> {
+    const url = this.endpoint("/models");
+    const response = await fetch(url, {
+      dispatcher: this.dispatcher(),
+      headers: this.headers(),
+      signal,
+    } as RequestInit);
+
+    if (!response.ok) {
+      const body = await safeText(response);
+      throw new CustomBackendError(
+        `Model listing failed (${response.status}): ${body}`,
+        response.status,
+      );
+    }
+
+    const json = await response.json();
+    const models = parseModelList(json);
+    logger.debug("[Custom Provider] Model listing response", {
+      discovered: models.length,
+      // Truncated raw body to reveal the actual shape when discovery yields 0.
+      raw: JSON.stringify(json)?.slice(0, 2000),
+      topLevelKeys:
+        json && typeof json === "object"
+          ? Object.keys(json as Record<string, unknown>)
+          : typeof json,
+      url,
+    });
+    return models;
+  }
+
   setConfig(config: CustomBackendConfig): void {
     this.config = config;
   }
@@ -232,23 +232,74 @@ export class CustomBackendClient {
     signal?: AbortSignal,
   ): AsyncGenerator<StreamDelta> {
     const url = this.endpoint("/chat/completions");
-    const response = await fetch(url, {
-      body: JSON.stringify(request),
-      dispatcher: this.dispatcher(),
-      headers: { ...this.headers(), "content-type": "application/json" },
-      method: "POST",
-      signal,
-    } as RequestInit);
+    const startedAt = Date.now();
+    logger.debug("[Custom Provider] Opening chat stream", {
+      hasTools: (request.tools?.length ?? 0) > 0,
+      messageCount: request.messages.length,
+      model: request.model,
+      reasoningEffort: request.reasoning_effort,
+      url,
+    });
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        body: JSON.stringify(request),
+        dispatcher: this.dispatcher(),
+        headers: { ...this.headers(), "content-type": "application/json" },
+        method: "POST",
+        signal,
+      } as RequestInit);
+    } catch (error) {
+      // A `fetch()` rejection is a transport failure (DNS, TLS, connection
+      // reset, socket timeout) — never an HTTP status. undici collapses the
+      // real reason to the generic message "fetch failed" and stashes it on
+      // `error.cause`, so surface the whole chain or the failure is undebuggable.
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      logger.error("[Custom Provider] Chat stream transport failure", {
+        detail: describeError(error),
+        elapsedMs: Date.now() - startedAt,
+        model: request.model,
+        url,
+      });
+      throw error;
+    }
+
+    logger.debug("[Custom Provider] Chat stream response headers", {
+      contentType: response.headers?.get("content-type"),
+      elapsedMs: Date.now() - startedAt,
+      ok: response.ok,
+      status: response.status,
+    });
 
     if (!response.ok || !response.body) {
       const body = await safeText(response);
+      logger.error("[Custom Provider] Chat request returned error status", {
+        body: body.slice(0, 2000),
+        hasBody: Boolean(response.body),
+        model: request.model,
+        status: response.status,
+      });
       throw new CustomBackendError(
         `Chat request failed (${response.status}): ${body}`,
         response.status,
       );
     }
 
-    yield* parseSseStream(response.body);
+    let eventCount = 0;
+    for await (const delta of parseSseStream(response.body)) {
+      eventCount++;
+      yield delta;
+    }
+
+    // Outcome classification (empty vs. truncated vs. content) is owned by the
+    // provider, which sees the parsed finish reason; here we only record the
+    // raw shape of the completed stream for debugging.
+    logger.debug("[Custom Provider] Chat stream completed", {
+      elapsedMs: Date.now() - startedAt,
+      events: eventCount,
+      model: request.model,
+    });
   }
 
   /**
@@ -318,6 +369,51 @@ export class CustomBackendError extends Error {
   }
 }
 
+/**
+ * Render an error for logging, walking the `cause` chain. undici reports every
+ * transport failure as a `TypeError: fetch failed` and hides the actionable
+ * reason (ECONNRESET, TLS alert, ENOTFOUND, UND_ERR_*) on `error.cause`, so a
+ * bare `error.message` is useless for diagnosing network problems.
+ */
+function describeError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    return { value: String(error) };
+  }
+  const chain: string[] = [];
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    const code = (current as { code?: unknown }).code;
+    const codeSuffix = code ? ` (${String(code)})` : "";
+    chain.push(`${current.name}: ${current.message}${codeSuffix}`);
+    current = (current as { cause?: unknown }).cause;
+  }
+  const root = error as { cause?: { code?: unknown } };
+  return {
+    causeChain: chain,
+    code: (error as { code?: unknown }).code ?? root.cause?.code,
+    message: error.message,
+    name: error.name,
+  };
+}
+
+/** Collect alternate ids/aliases for family matching, excluding the primary id. */
+function extractAliases(obj: Record<string, unknown>, primaryId: string): string[] | undefined {
+  const aliases = new Set<string>();
+  for (const key of ["model", "name", "model_name"] as const) {
+    const value = obj[key];
+    if (typeof value === "string" && value && value !== primaryId) {
+      aliases.add(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string" && item && item !== primaryId) aliases.add(item);
+      }
+    }
+  }
+  return aliases.size > 0 ? [...aliases] : undefined;
+}
+
 function extractModelId(obj: Record<string, unknown>): string | undefined {
   // Standard OpenAI uses a string `id`. Some gateways instead expose `name`
   // (which may be an array of routing aliases) and/or a canonical `model_name`.
@@ -354,17 +450,6 @@ function firstString(value: unknown): string | undefined {
   return undefined;
 }
 
-/** First positive-number field found among the given keys, or `undefined`. */
-function numericField(obj: Record<string, unknown>, keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = obj[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 /** Whether a model entry advertises the given capability in its `capabilities` array. */
 function hasCapability(obj: Record<string, unknown>, capability: string): boolean {
   const capabilities = obj.capabilities;
@@ -385,6 +470,22 @@ function isChatModel(obj: Record<string, unknown>): boolean {
     return hasCapability(obj, "chat");
   }
   return true;
+}
+
+/** Coerce a value to a finite non-negative number, or `undefined`. */
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** First positive-number field found among the given keys, or `undefined`. */
+function numericField(obj: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function parseChoice(choice: Record<string, unknown>, result: StreamDelta): void {
@@ -444,8 +545,8 @@ function parseModelList(json: unknown): CustomModel[] {
       if (!id || seen.has(id) || !isChatModel(obj)) continue;
       seen.add(id);
       models.push({
-        id,
         aliases: extractAliases(obj, id),
+        id,
         maxInputTokens: numericField(obj, ["max_input_tokens", "context_length", "context_window"]),
         maxOutputTokens: numericField(obj, ["max_output_tokens", "max_tokens"]),
         reasoning: supportsReasoning(obj),
@@ -505,6 +606,7 @@ async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator
         const rawEvent = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
 
+        logger.trace("[Custom Provider] SSE event", { raw: rawEvent.slice(0, 500) });
         const outcome = parseSseEvent(rawEvent);
         if (outcome === "done") return;
         if (outcome) yield outcome;
@@ -560,17 +662,12 @@ function parseUsage(usage: Record<string, unknown> | undefined): StreamDelta["us
     numberOrUndefined(usage.cache_creation_input_tokens) ??
     numberOrUndefined(usage.cache_creation_tokens);
   return {
-    cacheWriteTokens,
     cachedTokens,
+    cacheWriteTokens,
     completionTokens: numberOrUndefined(usage.completion_tokens),
     promptIncludesCached: openAiCached !== undefined,
     promptTokens: numberOrUndefined(usage.prompt_tokens),
   };
-}
-
-/** Coerce a value to a finite non-negative number, or `undefined`. */
-function numberOrUndefined(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 async function safeText(response: Response): Promise<string> {
@@ -580,22 +677,6 @@ async function safeText(response: Response): Promise<string> {
   } catch {
     return "<no body>";
   }
-}
-
-/** Collect alternate ids/aliases for family matching, excluding the primary id. */
-function extractAliases(obj: Record<string, unknown>, primaryId: string): string[] | undefined {
-  const aliases = new Set<string>();
-  for (const key of ["model", "name", "model_name"] as const) {
-    const value = obj[key];
-    if (typeof value === "string" && value && value !== primaryId) {
-      aliases.add(value);
-    } else if (Array.isArray(value)) {
-      for (const item of value) {
-        if (typeof item === "string" && item && item !== primaryId) aliases.add(item);
-      }
-    }
-  }
-  return aliases.size > 0 ? [...aliases] : undefined;
 }
 
 /** Derive reasoning/thinking support from capability metadata, if present. */
