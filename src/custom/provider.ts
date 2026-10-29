@@ -18,6 +18,7 @@ import {
   type TokenUsage,
 } from "./client";
 import { addCacheBreakpoints, convertMessages, convertTools } from "./converter";
+import { isGeminiModelFamily, resolveModelFamily } from "./family";
 import { resolveMaxOutputTokens } from "./limits";
 import {
   defaultReasoningEffort,
@@ -159,15 +160,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
 
     // Persist a new context-size picker selection, then refresh the model
     // list so the badge denominator updates on the next turn.
-    const rawContextSize = modelConfig?.contextSize;
-    const pickedContext = typeof rawContextSize === "number" ? rawContextSize : undefined;
-    if (typeof pickedContext === "number" && Number.isFinite(pickedContext)) {
-      const stored = this.getPersistedContextSize(settings, model.id);
-      if (pickedContext !== stored) {
-        await this.persistContextSize(settings, model.id, pickedContext);
-        this.notifyModelInformationChanged("context size changed");
-      }
-    }
+    await this.syncContextSizePick(settings, model.id, modelConfig?.contextSize);
 
     const abortController = new AbortController();
     const cancellation = token.onCancellationRequested(() => abortController.abort());
@@ -193,11 +186,15 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       // family on our backends (breeze/LiteLLM, QGenie) that supports prompt
       // caching. LiteLLM forwards `cache_control` to Anthropic; other backends
       // ignore the unknown field.
-      if (isClaudeFamily(model.id)) {
+      if (isClaudeFamily(model.id, model.family)) {
         addCacheBreakpoints(request.messages);
       }
 
-      const tools = convertTools(options.tools);
+      // Gate on the reported family (resolved from the id and its aliases at
+      // discovery) so gateway aliases of Gemini models are sanitized too.
+      const tools = convertTools(options.tools, {
+        sanitizeForGemini: isGeminiModelFamily(model.family) || isGeminiModelFamily(model.id),
+      });
       if (tools) {
         request.tools = tools;
         request.tool_choice = mapToolChoice(options.toolMode);
@@ -212,33 +209,12 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       }
 
       // Forward the picked reasoning effort only when the model declared it and
-      // the value is within the declared set — mirrors Copilot, which scrubs any
-      // effort a model didn't advertise rather than passing it through blindly.
-      const reasoning = (model as CustomLanguageModelChatInformation).reasoning;
-      const pickedEffort = modelConfig?.reasoningEffort;
-      if (typeof pickedEffort === "string" && reasoning) {
-        const hasTools = (request.tools?.length ?? 0) > 0;
-        if (reasoning.toolsIncompatibleWithReasoning && hasTools) {
-          // This model family rejects reasoning_effort when tools are also in
-          // the request (e.g. gpt-5.6-*). Silently omit the effort so the
-          // request succeeds; tool calling takes priority.
-          logger.debug(
-            "[Custom Provider] Omitting reasoning_effort: model incompatible with tools+effort",
-            {
-              effort: pickedEffort,
-              modelId: model.id,
-            },
-          );
-        } else if ((reasoning.levels as readonly string[]).includes(pickedEffort)) {
-          request.reasoning_effort = pickedEffort as ReasoningEffortLevel;
-        } else {
-          logger.warn("[Custom Provider] Dropping unsupported reasoning effort", {
-            allowed: reasoning.levels,
-            modelId: model.id,
-            requested: pickedEffort,
-          });
-        }
-      }
+      // the value is within the declared set.
+      this.applyReasoningEffort(
+        request,
+        model as CustomLanguageModelChatInformation,
+        modelConfig?.reasoningEffort,
+      );
 
       await this.streamResponse(request, progress, abortController.signal);
     } catch (error) {
@@ -246,22 +222,7 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
         logger.info("[Custom Provider] Request cancelled by user");
         return;
       }
-      const status = error instanceof CustomBackendError ? error.status : undefined;
-      if (status === 401) {
-        // The key has likely expired. We cannot refresh it (interactive OIDC),
-        // so log a clear hint. Per requirements, this is not surfaced to the UI.
-        logger.error(
-          "[Custom Provider] Authentication failed (401): the backend rejected the API key. " +
-            "It may have expired — re-issue it (e.g. run `breeze aws auth`) and update the backend's key.",
-          { modelId: model.id },
-        );
-      } else {
-        logger.error("[Custom Provider] Chat request failed", {
-          error: error instanceof Error ? error.message : String(error),
-          modelId: model.id,
-          status,
-        });
-      }
+      this.logRequestFailure(error, model.id);
       throw error;
     } finally {
       cancellation.dispose();
@@ -288,6 +249,35 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     if (tc.name) acc.name = tc.name;
     if (tc.argumentsFragment) acc.args += tc.argumentsFragment;
     accumulators.set(tc.index, acc);
+  }
+
+  private applyReasoningEffort(
+    request: ChatCompletionRequest,
+    model: CustomLanguageModelChatInformation,
+    pickedEffort: unknown,
+  ): void {
+    const reasoning = model.reasoning;
+    if (typeof pickedEffort !== "string" || !reasoning) return;
+
+    const hasTools = (request.tools?.length ?? 0) > 0;
+    if (reasoning.toolsIncompatibleWithReasoning && hasTools) {
+      // This model family rejects reasoning_effort when tools are also in
+      // the request (e.g. gpt-5.6-*). Silently omit the effort so the
+      // request succeeds; tool calling takes priority.
+      logger.debug(
+        "[Custom Provider] Omitting reasoning_effort: model incompatible with tools+effort",
+        { effort: pickedEffort, modelId: model.id },
+      );
+    } else if ((reasoning.levels as readonly string[]).includes(pickedEffort)) {
+      request.reasoning_effort = pickedEffort as ReasoningEffortLevel;
+    } else {
+      // Mirrors Copilot, which scrubs any effort a model didn't advertise.
+      logger.warn("[Custom Provider] Dropping unsupported reasoning effort", {
+        allowed: reasoning.levels,
+        modelId: model.id,
+        requested: pickedEffort,
+      });
+    }
   }
 
   private buildModelInfo(
@@ -337,7 +327,10 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       },
       category: this.pickerCategory(settings),
       configurationSchema: { properties },
-      family: "custom",
+      // Copilot keys prompt selection, tool-schema normalization and other
+      // per-model behavior on the family prefix (`claude`, `gemini`, `gpt-`, ...),
+      // so report the real model family rather than a constant.
+      family: resolveModelFamily(id, caps?.aliases),
       id,
       isUserSelectable: true,
       maxInputTokens,
@@ -356,8 +349,8 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       default: defaultReasoningEffort(levels, id),
       description: "How much reasoning effort the model should apply.",
       enum: [...levels],
-      enumDescriptions: levels.map(reasoningEffortDescription),
-      enumItemLabels: levels.map(reasoningEffortLabel),
+      enumDescriptions: levels.map((level) => reasoningEffortDescription(level)),
+      enumItemLabels: levels.map((level) => reasoningEffortLabel(level)),
       // MUST be "navigation": VS Code's model picker surfaces the Thinking
       // Effort dropdown by scanning configurationSchema for the property whose
       // group is "navigation" (see modelPickerConfiguration.ts). "reasoning"
@@ -420,6 +413,25 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
     );
     const value = map[contextSelectionKey(settings, modelId)];
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  }
+
+  private logRequestFailure(error: unknown, modelId: string): void {
+    const status = error instanceof CustomBackendError ? error.status : undefined;
+    if (status === 401) {
+      // The key has likely expired. We cannot refresh it (interactive OIDC),
+      // so log a clear hint. Per requirements, this is not surfaced to the UI.
+      logger.error(
+        "[Custom Provider] Authentication failed (401): the backend rejected the API key. " +
+          "It may have expired — re-issue it (e.g. run `breeze aws auth`) and update the backend's key.",
+        { modelId },
+      );
+    } else {
+      logger.error("[Custom Provider] Chat request failed", {
+        error: error instanceof Error ? error.message : String(error),
+        modelId,
+        status,
+      });
+    }
   }
 
   /**
@@ -628,6 +640,18 @@ export class CustomChatModelProvider implements vscode.Disposable, LanguageModel
       progress,
       signal,
     );
+  }
+
+  /** Persist a newly picked context size and refresh the model list so the badge updates. */
+  private async syncContextSizePick(
+    settings: CustomBackendSettings,
+    modelId: string,
+    picked: unknown,
+  ): Promise<void> {
+    if (typeof picked !== "number" || !Number.isFinite(picked)) return;
+    if (picked === this.getPersistedContextSize(settings, modelId)) return;
+    await this.persistContextSize(settings, modelId, picked);
+    this.notifyModelInformationChanged("context size changed");
   }
 
   /**

@@ -88,7 +88,8 @@ export interface OpenAITool {
   function: {
     description?: string;
     name: string;
-    parameters: unknown;
+    /** Omitted for argument-less tools on backends that reject empty object schemas. */
+    parameters?: unknown;
   };
   type: "function";
 }
@@ -592,7 +593,7 @@ async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator
 
   const flush = function* (rawEvent: string): Generator<StreamDelta> {
     const outcome = parseSseEvent(rawEvent);
-    if (outcome && outcome !== "done") yield outcome;
+    if (outcome !== undefined && outcome !== "done") yield outcome;
   };
 
   try {

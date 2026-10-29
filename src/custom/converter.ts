@@ -2,13 +2,8 @@ import { MIMEType } from "node:util";
 import * as vscode from "vscode";
 
 import { logger } from "../logger";
-import type {
-  OpenAIChatMessage,
-  OpenAIContentPart,
-  OpenAIContentPartWithCache,
-  OpenAITool,
-  OpenAIToolCall,
-} from "./client";
+import type { OpenAIChatMessage, OpenAIContentPart, OpenAITool, OpenAIToolCall } from "./client";
+import { sanitizeSchemaForGemini } from "./schema";
 
 /**
  * Convert VS Code chat messages/tools into OpenAI Chat Completions payloads.
@@ -76,101 +71,33 @@ export function addCacheBreakpoints(messages: OpenAIChatMessage[]): void {
   // Only allocate breakpoints not already present, mirroring Copilot's
   // `MaxCacheBreakpoints - countCacheBreakpoints(...)`. This keeps the function
   // idempotent and never exceeds Anthropic's cap across repeated calls.
-  let remaining = MAX_CACHE_BREAKPOINTS - countCacheBreakpoints(messages);
-  let belowCurrentUserMessage = true;
-
-  for (let i = messages.length - 1; i >= 0 && remaining > 0; i--) {
-    const msg = messages[i];
-    const prev = messages[i - 1];
-
-    if (hasCacheBreakpoint(msg)) {
-      if (msg.role === "user") {
-        belowCurrentUserMessage = false;
-      }
-      continue;
-    }
-
-    const isLastToolResultInRound = msg.role === "tool" && prev?.role !== "tool";
-    const isTerminalAssistant = msg.role === "assistant" && !msg.tool_calls?.length;
-    const shouldMark =
-      (belowCurrentUserMessage && (isLastToolResultInRound || msg.role === "user")) ||
-      isTerminalAssistant;
-
-    if (shouldMark && markCacheBreakpoint(msg)) {
-      remaining--;
-    }
-    if (msg.role === "user") {
-      belowCurrentUserMessage = false;
-    }
-  }
-
-  // Spend any leftover breakpoints on the leading system/user messages (the
-  // static preamble: system prompt + custom instructions), which change least.
-  for (let i = 0; i < messages.length && remaining > 0; i++) {
-    const msg = messages[i];
-    if (msg.role !== "system" && msg.role !== "user") {
-      break;
-    }
-    if (!hasCacheBreakpoint(msg) && markCacheBreakpoint(msg)) {
-      remaining--;
-    }
-  }
-}
-
-/** Whether a message already carries a cache breakpoint on any content block. */
-function hasCacheBreakpoint(msg: OpenAIChatMessage): boolean {
-  return Array.isArray(msg.content) && msg.content.some((part) => part.cache_control !== undefined);
-}
-
-/** Total cache breakpoints already present across all messages. */
-function countCacheBreakpoints(messages: OpenAIChatMessage[]): number {
-  let count = 0;
-  for (const msg of messages) {
-    if (Array.isArray(msg.content)) {
-      count += msg.content.filter((part) => part.cache_control !== undefined).length;
-    }
-  }
-  return count;
-}
-
-/**
- * Attach a cache breakpoint to the last content block of a message, converting
- * string content into a single text block first. Returns `false` (no-op) when
- * the message has no cacheable content (e.g. an assistant message that is only
- * tool calls), so the caller doesn't waste a breakpoint.
- */
-function markCacheBreakpoint(msg: OpenAIChatMessage): boolean {
-  if (hasCacheBreakpoint(msg)) {
-    return false;
-  }
-  if (typeof msg.content === "string") {
-    if (msg.content.length === 0) {
-      return false;
-    }
-    msg.content = [{ text: msg.content, type: "text" }];
-  }
-  if (!Array.isArray(msg.content) || msg.content.length === 0) {
-    return false;
-  }
-  const last = msg.content[msg.content.length - 1] as OpenAIContentPartWithCache;
-  last.cache_control = { type: "ephemeral" };
-  return true;
+  const budget = MAX_CACHE_BREAKPOINTS - countCacheBreakpoints(messages);
+  markLeadingBreakpoints(messages, markTrailingBreakpoints(messages, budget));
 }
 
 export function convertTools(
   tools: readonly vscode.LanguageModelChatTool[] | undefined,
+  options: { readonly sanitizeForGemini?: boolean } = {},
 ): OpenAITool[] | undefined {
   if (!tools || tools.length === 0) {
     return undefined;
   }
-  return tools.map((tool) => ({
-    function: {
-      description: tool.description,
-      name: tool.name,
-      parameters: tool.inputSchema ?? { properties: {}, type: "object" },
-    },
-    type: "function",
-  }));
+  return tools.map((tool) => {
+    // Vertex AI rejects unknown JSON Schema keywords (e.g. `$comment`) and empty
+    // object schemas, so Gemini models get a reduced schema, or none at all for
+    // a tool that takes no arguments.
+    const parameters = options.sanitizeForGemini
+      ? sanitizeSchemaForGemini(tool.inputSchema)
+      : (tool.inputSchema ?? { properties: {}, type: "object" });
+    return {
+      function: {
+        description: tool.description,
+        name: tool.name,
+        ...(parameters === undefined ? {} : { parameters }),
+      },
+      type: "function",
+    };
+  });
 }
 
 function convertAssistantMessage(msg: vscode.LanguageModelChatRequestMessage): OpenAIChatMessage[] {
@@ -235,6 +162,17 @@ function convertUserMessage(msg: vscode.LanguageModelChatRequestMessage): OpenAI
   return messages;
 }
 
+/** Total cache breakpoints already present across all messages. */
+function countCacheBreakpoints(messages: OpenAIChatMessage[]): number {
+  let count = 0;
+  for (const msg of messages) {
+    if (Array.isArray(msg.content)) {
+      count += msg.content.filter((part) => part.cache_control !== undefined).length;
+    }
+  }
+  return count;
+}
+
 function extractText(msg: vscode.LanguageModelChatRequestMessage): string {
   return msg.content
     .filter((p): p is vscode.LanguageModelTextPart => p instanceof vscode.LanguageModelTextPart)
@@ -265,6 +203,11 @@ function extractToolResultText(content: unknown): string {
   return String(content ?? "");
 }
 
+/** Whether a message already carries a cache breakpoint on any content block. */
+function hasCacheBreakpoint(msg: OpenAIChatMessage): boolean {
+  return Array.isArray(msg.content) && msg.content.some((part) => part.cache_control !== undefined);
+}
+
 function isDataPart(part: unknown): part is DataPart {
   return (
     !!part &&
@@ -283,6 +226,89 @@ function isNonEmptyMessage(msg: OpenAIChatMessage): boolean {
     return msg.role === "tool" || msg.content.length > 0;
   }
   return Array.isArray(msg.content) && msg.content.length > 0;
+}
+
+/**
+ * Attach a cache breakpoint to the last content block of a message, converting
+ * string content into a single text block first. Returns `false` (no-op) when
+ * the message has no cacheable content (e.g. an assistant message that is only
+ * tool calls), so the caller doesn't waste a breakpoint.
+ */
+function markCacheBreakpoint(msg: OpenAIChatMessage): boolean {
+  if (hasCacheBreakpoint(msg)) {
+    return false;
+  }
+  if (typeof msg.content === "string") {
+    if (msg.content.length === 0) {
+      return false;
+    }
+    msg.content = [{ text: msg.content, type: "text" }];
+  }
+  if (!Array.isArray(msg.content) || msg.content.length === 0) {
+    return false;
+  }
+  const last = msg.content.at(-1)!;
+  last.cache_control = { type: "ephemeral" };
+  return true;
+}
+
+/**
+ * Spend any leftover breakpoints on the leading system/user messages (the
+ * static preamble: system prompt + custom instructions), which change least.
+ */
+function markLeadingBreakpoints(messages: OpenAIChatMessage[], budget: number): void {
+  let remaining = budget;
+  for (let i = 0; i < messages.length && remaining > 0; i++) {
+    const msg = messages[i];
+    if (msg.role !== "system" && msg.role !== "user") {
+      break;
+    }
+    if (!hasCacheBreakpoint(msg) && markCacheBreakpoint(msg)) {
+      remaining--;
+    }
+  }
+}
+
+/**
+ * Walk backwards from the newest message placing breakpoints on the stable
+ * prefix of an agentic loop. Returns the number of breakpoints left unspent.
+ */
+function markTrailingBreakpoints(messages: OpenAIChatMessage[], budget: number): number {
+  let remaining = budget;
+  let belowCurrentUserMessage = true;
+
+  for (let i = messages.length - 1; i >= 0 && remaining > 0; i--) {
+    const msg = messages[i];
+    if (
+      !hasCacheBreakpoint(msg) &&
+      shouldMarkTrailing(msg, messages[i - 1], belowCurrentUserMessage) &&
+      markCacheBreakpoint(msg)
+    ) {
+      remaining--;
+    }
+    if (msg.role === "user") {
+      belowCurrentUserMessage = false;
+    }
+  }
+  return remaining;
+}
+
+/**
+ * Whether a message is a cache anchor: below the current user message, the last
+ * tool result of a round or the user message itself; above it, a terminal
+ * assistant response.
+ */
+function shouldMarkTrailing(
+  msg: OpenAIChatMessage,
+  prev: OpenAIChatMessage | undefined,
+  belowCurrentUserMessage: boolean,
+): boolean {
+  const isLastToolResultInRound = msg.role === "tool" && prev?.role !== "tool";
+  const isTerminalAssistant = msg.role === "assistant" && (msg.tool_calls?.length ?? 0) === 0;
+  return (
+    (belowCurrentUserMessage && (isLastToolResultInRound || msg.role === "user")) ||
+    isTerminalAssistant
+  );
 }
 
 function toImagePart(part: DataPart): OpenAIContentPart | undefined {
